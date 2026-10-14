@@ -13,6 +13,9 @@ ALLOWED_ARGS = {
     "search_auth_logs": {"src_ip", "user", "lines"},
     "inspect_user_changes": set(),
     "check_ssh_config": set(),
+    "inspect_active_processes": {"limit"},
+    "inspect_network_connections": set(),
+    "inspect_cron_persistence": set(),
 }
 VERDICTS = {"malicious_activity_likely", "suspicious_needs_more_data", "benign_likely", "insufficient_data"}
 SEVERITIES = {"info", "low", "medium", "high", "critical"}
@@ -33,6 +36,9 @@ TOOLS
 - search_auth_logs(src_ip: string or null, user: string or null, lines: integer 200-2000): summary and recent SSH/sudo events filtered by source IP and/or user. Tip: scan at least 500 lines to cover the full timeframe of the alert.
 - inspect_user_changes(): regular accounts, sudo group members, comparison with the approved baseline, recent account-change log lines.
 - check_ssh_config(): key SSH server settings (value and whether it comes from config or default).
+- inspect_active_processes(limit: integer 5-50): top running processes by CPU/memory and automated heuristic checks for reverse shells, crypto miners, or suspicious background commands.
+- inspect_network_connections(): active listening ports and established network connections (helps detect open backdoors or outbound C2 communication).
+- inspect_cron_persistence(): system crontabs (/etc/crontab, /etc/cron.d/*) and periodic scripts to detect persistence mechanisms.
 
 OUTPUT: exactly one JSON object, in one of two forms.
 Form 1, call a tool:

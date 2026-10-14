@@ -26,6 +26,9 @@ Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động k
    - `search_auth_logs`: Quét và lọc sự kiện xác thực SSH/sudo theo IP nguồn và tài khoản.
    - `inspect_user_changes`: Kiểm tra danh sách người dùng thường, thành viên nhóm `sudo`, đối chiếu với `baseline.json` để phát hiện user lạ hoặc leo thang quyền trái phép.
    - `check_ssh_config`: Đọc và phân tích các tham số cấu hình SSH then chốt (`PermitRootLogin`, `PasswordAuthentication`, `MaxAuthTries`).
+   - `inspect_active_processes`: Liệt kê các tiến trình đang chạy theo CPU/Memory, tích hợp thuật toán heuristic tự động phát hiện reverse shell, crypto miner hoặc tiến trình độc hại.
+   - `inspect_network_connections`: Phân tích các cổng đang mở lắng nghe (Listening services) và các kết nối mạng đang hoạt động (Established) để phát hiện backdoor listener hoặc kết nối C2 outbound.
+   - `inspect_cron_persistence`: Kiểm tra toàn diện crontab hệ thống (`/etc/crontab`, `/etc/cron.d/*`, các script định kỳ) để phát hiện cơ chế cắm chốt duy trì quyền truy cập (persistence).
 
 5. **Báo cáo kết luận chuẩn SOC:**
    - Phân loại rõ ràng:
@@ -117,3 +120,4 @@ python run_agent.py
 
 ## 📜 Giấy phép
 Dự án được phát hành dưới giấy phép MIT License.
+

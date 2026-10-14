@@ -154,8 +154,142 @@ def check_ssh_config():
         return _err(tool, ex)
 
 
+# ---------- Tool 4: kiểm tra tiến trình đang chạy ----------
+SUSPICIOUS_CMD_PATTERNS = [
+    (re.compile(r"(?:/dev/tcp/|/dev/udp/)"), "reverse_shell_dev_tcp"),
+    (re.compile(r"(?:bash|sh|zsh)\s+-i"), "interactive_reverse_shell"),
+    (re.compile(r"(?:nc|netcat|ncat|socat)\s+.*-e"), "netcat_reverse_shell"),
+    (re.compile(r"(?:curl|wget)\s+.*\|\s*(?:sh|bash)"), "pipe_download_execute"),
+    (re.compile(r"(?:xmrig|minerd|cpuminer)"), "cryptocurrency_miner"),
+    (re.compile(r"python(?:\d+)?\s+-c\s+.*socket"), "python_socket_payload"),
+]
+
+
+def inspect_active_processes(limit=25):
+    tool = "inspect_active_processes"
+    try:
+        limit = max(5, min(int(limit), 100))
+        out, err = run_fixed_command(
+            "ps -eo user,pid,ppid,%cpu,%mem,stat,command --sort=-%cpu"
+        )
+        if not out.strip():
+            return _err(tool, err or "không đọc được danh sách tiến trình")
+
+        proc_lines = out.strip().splitlines()[1:]
+        processes = []
+        suspicious = []
+
+        for line in proc_lines:
+            parts = line.split(None, 6)
+            if len(parts) < 7:
+                continue
+            u, pid, ppid, cpu, mem, stat, cmd = parts
+            if u == "agent_soc" and "ps -eo" in cmd:
+                continue
+
+            item = {
+                "user": u,
+                "pid": int(pid) if pid.isdigit() else pid,
+                "ppid": int(ppid) if ppid.isdigit() else ppid,
+                "cpu": float(cpu) if cpu.replace(".", "", 1).isdigit() else 0.0,
+                "mem": float(mem) if mem.replace(".", "", 1).isdigit() else 0.0,
+                "stat": stat,
+                "command": cmd[:250],
+            }
+
+            for pattern, reason in SUSPICIOUS_CMD_PATTERNS:
+                if pattern.search(cmd):
+                    suspicious.append({**item, "flag": reason})
+                    break
+
+            processes.append(item)
+
+        return _ok(tool, {
+            "total_running": len(processes),
+            "suspicious_processes": suspicious,
+            "top_processes_by_cpu": processes[:limit],
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+# ---------- Tool 5: kiểm tra cổng mở và kết nối mạng ----------
+def inspect_network_connections():
+    tool = "inspect_network_connections"
+    try:
+        listen_out, _ = run_fixed_command("ss -tuln")
+        listening = []
+        for line in listen_out.strip().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 5:
+                proto, state, _, _, local = parts[:5]
+                listening.append({"proto": proto, "state": state, "local_address": local})
+
+        conn_out, _ = run_fixed_command("ss -tun state established")
+        established = []
+        for line in conn_out.strip().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 5:
+                proto, _, _, local, peer = parts[:5]
+                established.append({"proto": proto, "local": local, "peer": peer})
+
+        return _ok(tool, {
+            "listening_services": listening,
+            "established_connections": established,
+            "total_established": len(established),
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+# ---------- Tool 6: kiểm tra persistence qua cron ----------
+def inspect_cron_persistence():
+    tool = "inspect_cron_persistence"
+    try:
+        crontab_out, _ = run_fixed_command("cat /etc/crontab 2>/dev/null")
+        crontab_entries = []
+        for raw in crontab_out.splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#"):
+                crontab_entries.append(line[:250])
+
+        cron_d_out, _ = run_fixed_command("head -n 20 /etc/cron.d/* 2>/dev/null")
+        cron_d_entries = []
+        current_file = None
+        for raw in cron_d_out.splitlines():
+            line = raw.strip()
+            if line.startswith("==>") and line.endswith("<=="):
+                current_file = line.replace("==>", "").replace("<==", "").strip()
+                continue
+            if line and not line.startswith("#") and current_file:
+                cron_d_entries.append({"file": current_file, "entry": line[:250]})
+
+        scripts_out, _ = run_fixed_command("ls -1 /etc/cron.daily /etc/cron.hourly /etc/cron.weekly 2>/dev/null")
+        scripts = [s.strip() for s in scripts_out.splitlines() if s.strip()]
+
+        suspicious = []
+        for entry in crontab_entries:
+            if any(p in entry for p in ["/tmp", "/dev/shm", "curl", "wget", "nc ", "bash -i"]):
+                suspicious.append({"source": "/etc/crontab", "entry": entry})
+        for cde in cron_d_entries:
+            if any(p in cde["entry"] for p in ["/tmp", "/dev/shm", "curl", "wget", "nc ", "bash -i"]):
+                suspicious.append({"source": cde["file"], "entry": cde["entry"]})
+
+        return _ok(tool, {
+            "crontab_entries": crontab_entries,
+            "cron_d_entries": cron_d_entries,
+            "periodic_scripts": scripts[:30],
+            "suspicious_cron_jobs": suspicious,
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
 TOOLS = {
     "search_auth_logs": search_auth_logs,
     "inspect_user_changes": inspect_user_changes,
     "check_ssh_config": check_ssh_config,
+    "inspect_active_processes": inspect_active_processes,
+    "inspect_network_connections": inspect_network_connections,
+    "inspect_cron_persistence": inspect_cron_persistence,
 }
