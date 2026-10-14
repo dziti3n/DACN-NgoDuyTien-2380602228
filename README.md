@@ -30,7 +30,13 @@ Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động k
    - `inspect_network_connections`: Phân tích các cổng đang mở lắng nghe (Listening services) và các kết nối mạng đang hoạt động (Established) để phát hiện backdoor listener hoặc kết nối C2 outbound.
    - `inspect_cron_persistence`: Kiểm tra toàn diện crontab hệ thống (`/etc/crontab`, `/etc/cron.d/*`, các script định kỳ) để phát hiện cơ chế cắm chốt duy trì quyền truy cập (persistence).
 
-5. **Báo cáo kết luận chuẩn SOC:**
+5. **Động cơ phát hiện sự cố đa lớp (Multi-Rule Detection Engine):**
+   - `detect_ssh_bruteforce`: Phát hiện các đợt tấn công dò mật khẩu SSH dồn dập, tự động nhận diện các phiên đăng nhập thành công sau chuỗi thất bại.
+   - `detect_sudo_abuse`: Phát hiện các hành vi lạm dụng đặc quyền sudo: tài khoản không có quyền cố tình gõ sudo (`user NOT in sudoers`), nhập sai mật khẩu sudo dồn dập, hoặc thực thi các lệnh nhạy cảm cao (spawn root shell, đọc `/etc/shadow`, xóa log).
+   - `detect_baseline_account_tampering`: Tự động đối chiếu với `baseline.json` để phát hiện tạo tài khoản lạ hoặc gán nhóm đặc quyền (`sudo`, `wheel`, `root`) trái phép.
+   - `detect_all`: Hợp nhất tất cả các quy tắc phát hiện trên toàn bộ dòng sự kiện log.
+
+6. **Báo cáo kết luận chuẩn SOC:**
    - Phân loại rõ ràng:
      - **Verdict:** `malicious_activity_likely` | `suspicious_needs_more_data` | `benign_likely` | `insufficient_data`
      - **Severity:** `info` | `low` | `medium` | `high` | `critical`
