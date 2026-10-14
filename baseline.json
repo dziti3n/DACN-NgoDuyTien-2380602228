@@ -1,0 +1,4 @@
+{
+  "allowed_users": ["admin_duytien", "agent_soc"],
+  "allowed_sudo_members": ["admin_duytien"]
+}

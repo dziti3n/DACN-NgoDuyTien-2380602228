@@ -1,0 +1,29 @@
+# Môi trường ảo Python
+.venv/
+env/
+venv/
+ENV/
+
+# Secrets và Biến môi trường (TUYỆT ĐỐI KHÔNG COMMIT)
+.env
+.env.local
+*.pem
+*.key
+id_rsa*
+soc_agent_key*
+
+# Bytecode và Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE và OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Run logs chi tiết từ các lần điều tra thực tế
+runs/*.json
+!runs/.gitkeep
