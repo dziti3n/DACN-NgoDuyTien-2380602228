@@ -56,9 +56,13 @@ soc-agent/
 ├── log_parser.py       # Bộ phân tích cú pháp nhật ký /var/log/auth.log
 ├── read_logs.py        # Module kết nối SSH (Paramiko) để thực thi lệnh đọc log cố định
 ├── llm_client.py       # Lớp tương tác LLM đa nền tảng (Gemini, Ollama, Groq)
-├── run_agent.py        # Kịch bản chạy toàn bộ quy trình điều tra tự động
+├── app.py              # Giao diện Web Dashboard (Streamlit) trực quan hóa điều tra
+├── run_agent.py        # Kịch bản chạy điều tra tự động trên Terminal
+├── run_detection.py    # Kịch bản quét và hiển thị toàn bộ cảnh báo
 ├── baseline.json       # Danh sách tài khoản và nhóm quyền được phê duyệt chuẩn
 ├── test_step1.py       # Bộ kiểm thử đơn vị cho LLM client và cơ chế fallback
+├── test_detection_rules.py # Bộ kiểm thử các quy tắc phát hiện tấn công
+├── test_tools.py       # Bộ kiểm thử 6 công cụ điều tra
 ├── requirements.txt    # Danh sách thư viện Python cần thiết
 ├── .env.example        # Mẫu cấu hình biến môi trường
 └── runs/               # Thư mục lưu vết các phiên điều tra (JSON logs)
@@ -109,10 +113,16 @@ Chạy script kiểm thử để đảm bảo kết nối LLM và cơ chế fall
 python test_step1.py
 ```
 
-### 5. Thực thi điều tra cảnh báo
+### 5. Thực thi điều tra cảnh báo (Terminal CLI)
 ```bash
 python run_agent.py
 ```
+
+### 6. Khởi chạy Giao diện Web Dashboard (Streamlit UI)
+```bash
+streamlit run app.py
+```
+Trình duyệt sẽ tự động mở bảng điều khiển trực quan tại địa chỉ `http://localhost:8501`.
 
 ---
 

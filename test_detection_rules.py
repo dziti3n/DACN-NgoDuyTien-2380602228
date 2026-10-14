@@ -74,3 +74,4 @@ check("4.1 Hợp nhất tất cả cảnh báo", len(all_alerts) == 5, f"Mong đ
 print("\n==========================================================")
 print(f"KẾT QUẢ KIỂM THỬ: {passed} PASS, {failed} FAIL")
 print("==========================================================")
+

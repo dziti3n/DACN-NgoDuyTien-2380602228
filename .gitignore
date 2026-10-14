@@ -4,13 +4,23 @@ env/
 venv/
 ENV/
 
-# Secrets và Biến môi trường (TUYỆT ĐỐI KHÔNG COMMIT)
+# Secrets và Biến môi trường (TUYỆT ĐỐI KHÔNG COMMIT LÊN GIT)
 .env
-.env.local
+.env.*
+!.env.example
 *.pem
 *.key
 id_rsa*
 soc_agent_key*
+*.p12
+*.pfx
+.streamlit/secrets.toml
+
+# Logs và Dữ liệu runtime
+*.log
+runs/*.json
+runs/*.log
+!runs/.gitkeep
 
 # Bytecode và Cache
 __pycache__/
@@ -23,7 +33,4 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
-
-# Run logs chi tiết từ các lần điều tra thực tế
-runs/*.json
-!runs/.gitkeep
+desktop.ini
