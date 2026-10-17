@@ -60,9 +60,11 @@ soc-agent/
 ├── run_agent.py        # Kịch bản chạy điều tra tự động trên Terminal
 ├── run_detection.py    # Kịch bản quét và hiển thị toàn bộ cảnh báo
 ├── baseline.json       # Danh sách tài khoản và nhóm quyền được phê duyệt chuẩn
-├── test_step1.py       # Bộ kiểm thử đơn vị cho LLM client và cơ chế fallback
-├── test_detection_rules.py # Bộ kiểm thử các quy tắc phát hiện tấn công
-├── test_tools.py       # Bộ kiểm thử 6 công cụ điều tra
+├── security_audit.py   # Công cụ tự động quét chống rò rỉ Secret / API Key
+├── tests/              # Thư mục chứa toàn bộ bộ kiểm thử tự động
+│   ├── test_detection_rules.py # Kiểm thử 11 kịch bản phát hiện tấn công
+│   ├── test_llm.py     # Kiểm thử kết nối mô hình LLM (Ollama/Cloud)
+│   └── test_tools.py   # Kiểm thử 6 công cụ điều tra trên server lab
 ├── requirements.txt    # Danh sách thư viện Python cần thiết
 ├── .env.example        # Mẫu cấu hình biến môi trường
 └── runs/               # Thư mục lưu vết các phiên điều tra (JSON logs)
@@ -92,25 +94,35 @@ pip install -r requirements.txt
 ```
 
 ### 3. Cấu hình biến môi trường
-Sao chép file `.env.example` thành `.env` và điền khóa API của bạn:
+Sao chép file `.env.example` thành `.env`:
 ```bash
 cp .env.example .env
 ```
 
-Mở `.env` để cấu hình:
-```ini
-LLM_PROVIDER=gemini
-LLM_API_KEY=your_gemini_api_key_here
-LLM_MODEL=gemini-3.5-flash-lite
-LLM_FALLBACK_MODELS=gemini-3-flash-preview,gemini-3.5-flash,gemini-3.8-flash
-```
+Mở `.env` để chọn chế độ chạy:
+- **Chạy Local 100% bằng Ollama (Không cần mạng, không tốn tiền):**
+  ```ini
+  LLM_PROVIDER=ollama
+  OLLAMA_BASE_URL=http://localhost:11434/v1
+  OLLAMA_MODEL=qwen3:4b
+  ```
+- **Hoặc chạy bằng Cloud API (Gemini):**
+  ```ini
+  LLM_PROVIDER=gemini
+  LLM_API_KEY=your_gemini_api_key_here
+  LLM_MODEL=gemini-3.5-flash-lite
+  ```
 
-*(Nếu muốn dùng Local LLM qua Ollama, chỉ cần đổi `LLM_PROVIDER=ollama` và bật `ollama run qwen2.5:7b-instruct`)*.
-
-### 4. Kiểm tra hoạt động của mô hình
-Chạy script kiểm thử để đảm bảo kết nối LLM và cơ chế fallback hoạt động tốt:
+### 4. Chạy kiểm thử hệ thống
 ```bash
-python test_step1.py
+# Kiểm tra kết nối mô hình LLM
+python tests/test_llm.py
+
+# Kiểm thử các quy tắc phát hiện tấn công
+python tests/test_detection_rules.py
+
+# Quét kiểm tra an toàn chống lộ Secret/Key
+python security_audit.py
 ```
 
 ### 5. Thực thi điều tra cảnh báo (Terminal CLI)

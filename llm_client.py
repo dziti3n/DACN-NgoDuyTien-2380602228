@@ -14,8 +14,10 @@ class LLMError(Exception):
 
 
 def parse_json(text):
-    """Trích xuất và parse JSON từ phản hồi LLM an toàn, loại bỏ markdown fence nếu có."""
+    """Trích xuất và parse JSON từ phản hồi LLM an toàn, loại bỏ think tag, markdown fence nếu có."""
     text = (text or "").strip()
+    # Loại bỏ reasoning tag <think>...</think> nếu có từ các dòng model Qwen / DeepSeek
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     # Loại bỏ code block ```json ... ```
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.DOTALL).strip()
     try:
@@ -108,7 +110,7 @@ class OpenAICompatibleClient:
         self.api_key = api_key or "none"
         self.model = model
         self.last_model_used = model
-        self.client = httpx.Client(timeout=60.0)
+        self.client = httpx.Client(timeout=180.0)
 
     def generate(self, system, user, retries=2):
         import httpx
@@ -123,7 +125,7 @@ class OpenAICompatibleClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0.2,
+            "temperature": 0.1,
             "response_format": {"type": "json_object"},
         }
 
@@ -159,16 +161,16 @@ class OpenAICompatibleClient:
 def get_llm_client(provider=None, model=None):
     """Factory khởi tạo client dựa trên cấu hình LLM_PROVIDER trong file .env.
     Hỗ trợ:
-      - 'gemini' (mặc định)
       - 'ollama' (Local LLM qua http://localhost:11434/v1)
+      - 'gemini' (Google Gemini API)
       - 'groq'   (Miễn phí, siêu nhanh qua https://api.groq.com/openai/v1)
       - 'openai' (Hoặc tương thích)
     """
-    prov = (provider or os.getenv("LLM_PROVIDER", "gemini")).lower().strip()
+    prov = (provider or os.getenv("LLM_PROVIDER", "ollama")).lower().strip()
 
     if prov == "ollama":
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        m = model or os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
+        m = model or os.getenv("OLLAMA_MODEL", "qwen3:4b")
         return OpenAICompatibleClient(base_url=base_url, api_key="ollama", model=m)
 
     if prov == "groq":

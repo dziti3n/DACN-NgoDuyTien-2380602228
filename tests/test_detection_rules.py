@@ -1,10 +1,15 @@
+import os
 import sys
-from datetime import datetime
+
+# Thêm thư mục gốc vào sys.path để có thể import các module chính
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from log_parser import Event, parse_log
+from log_parser import parse_log
 from detection import (
     detect_ssh_bruteforce,
     detect_sudo_abuse,
@@ -59,7 +64,8 @@ check("2.3 Phát hiện lệnh sudo nhạy cảm nguy hiểm (su -)", "sudo_susp
 
 # --- TEST 3: Kiểm tra Rule phát hiện vi phạm Baseline ---
 print("\n3. Kiểm tra Rule detect_baseline_account_tampering:")
-alerts_baseline = detect_baseline_account_tampering(events, baseline_path="baseline.json")
+baseline_file = os.path.join(ROOT_DIR, "baseline.json")
+alerts_baseline = detect_baseline_account_tampering(events, baseline_path=baseline_file)
 baseline_rules = [a.rule for a in alerts_baseline]
 
 check("3.1 Phát hiện tạo user lạ ngoài baseline (evil_backdoor)", "unauthorized_account_creation" in baseline_rules)
@@ -68,7 +74,7 @@ check("3.2 Phát hiện cấp quyền sudo cho user ngoài baseline", "unauthori
 
 # --- TEST 4: Kiểm tra detect_all hợp nhất ---
 print("\n4. Kiểm tra detect_all:")
-all_alerts = detect_all(events, baseline_path="baseline.json")
+all_alerts = detect_all(events, baseline_path=baseline_file)
 check("4.1 Hợp nhất tất cả cảnh báo", len(all_alerts) == 5, f"Mong đợi 5 cảnh báo, có {len(all_alerts)}")
 
 print("\n==========================================================")

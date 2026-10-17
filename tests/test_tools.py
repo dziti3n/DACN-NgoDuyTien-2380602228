@@ -1,8 +1,16 @@
-import json
+import os
 import sys
+
+# Thêm thư mục gốc vào sys.path
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+
+from dotenv import load_dotenv
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 from tools import (
     search_auth_logs,
@@ -49,3 +57,4 @@ if res_cron['status'] == 'ok':
     print(f"Suspicious cron jobs: {len(res_cron['data']['suspicious_cron_jobs'])}")
 
 print("\n[+] Hoàn thành kiểm tra tất cả các tools mới thành công!")
+
