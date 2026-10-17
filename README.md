@@ -57,8 +57,7 @@ soc-agent/
 ├── read_logs.py        # Module kết nối SSH (Paramiko) để thực thi lệnh đọc log cố định
 ├── llm_client.py       # Lớp tương tác LLM đa nền tảng (Gemini, Ollama, Groq)
 ├── app.py              # Giao diện Web Dashboard (Streamlit) trực quan hóa điều tra
-├── run_agent.py        # Kịch bản chạy điều tra tự động trên Terminal
-├── run_detection.py    # Kịch bản quét và hiển thị toàn bộ cảnh báo
+├── cli.py              # Công cụ dòng lệnh hợp nhất (Scan, Investigate, UI, Test)
 ├── baseline.json       # Danh sách tài khoản và nhóm quyền được phê duyệt chuẩn
 ├── security_audit.py   # Công cụ tự động quét chống rò rỉ Secret / API Key
 ├── tests/              # Thư mục chứa toàn bộ bộ kiểm thử tự động
@@ -125,13 +124,31 @@ python tests/test_detection_rules.py
 python security_audit.py
 ```
 
-### 5. Thực thi điều tra cảnh báo (Terminal CLI)
+### 5. Sử dụng Công cụ Dòng lệnh Hợp nhất (Unified CLI)
+Hệ thống cung cấp file `cli.py` giúp bạn thực hiện mọi thao tác trên terminal một cách thuận tiện:
+
 ```bash
-python run_agent.py
+# Quét và hiển thị toàn bộ cảnh báo an ninh trên máy chủ lab
+python cli.py scan
+
+# Điều tra tự động cảnh báo mới nhất
+python cli.py investigate
+
+# Điều tra một cảnh báo cụ thể theo số thứ tự (ví dụ cảnh báo #1)
+python cli.py investigate 1
+
+# Chạy toàn bộ các bài kiểm thử tự động
+python cli.py test
+
+# Mở nhanh giao diện Web Dashboard
+python cli.py ui
 ```
 
 ### 6. Khởi chạy Giao diện Web Dashboard (Streamlit UI)
+Bạn có thể mở giao diện Web qua lệnh:
 ```bash
+python cli.py ui
+# hoặc
 streamlit run app.py
 ```
 Trình duyệt sẽ tự động mở bảng điều khiển trực quan tại địa chỉ `http://localhost:8501`.
