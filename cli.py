@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-cli.py - Giao diện dòng lệnh hợp nhất (Unified CLI) cho AI SOC Investigation Agent.
-Hỗ trợ quét cảnh báo, kích hoạt điều tra tự động, chạy kiểm thử và khởi chạy Web Dashboard.
+cli.py - Giao diện dòng lệnh hợp nhất (Unified CLI) cho AI SOC Investigation & Defense Agent.
+Hỗ trợ quét cảnh báo, kích hoạt điều tra tự động, thực thi phản ứng có kiểm soát (Policy Engine & UFW),
+chạy kiểm thử và khởi chạy Web Dashboard.
 """
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -18,6 +20,25 @@ from read_logs import run_fixed_command, HOST, USER
 from log_parser import parse_log
 from detection import detect_all, alert_to_dict
 from agent import investigate
+from tools import (
+    TOOLS,
+    RESPONSE_TOOLS,
+    block_ip,
+    unblock_ip,
+    verify_response,
+    get_firewall_status,
+)
+from policy_engine import (
+    evaluate_action,
+    record_audit_log,
+    is_protected_ip,
+    validate_ip,
+)
+
+
+def extract_ip(text):
+    m = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text or "")
+    return m.group(0) if m else None
 
 
 def fetch_alerts(lines=1000):
@@ -107,10 +128,141 @@ def cmd_investigate(args):
             print(f"  - ❓ {md}")
             
     print("\nĐề xuất xử lý (Remediation Actions):")
-    for act in c.get("recommended_actions", []):
+    recs = c.get("recommended_actions", [])
+    for act in recs:
         print(f"  - 👉 {act}")
 
     print(f"\n[+] Toàn bộ nhật ký phiên điều tra đã lưu tại: {run.get('saved_to')}")
+
+    # ==========================================================
+    # LỚP PHẢN ỨNG CÓ KIỂM SOÁT (POLICY ENGINE & HITL PROMPT)
+    # ==========================================================
+    for act in recs:
+        target_ip = extract_ip(act) or alert.get("src_ip")
+        if any(k in act.lower() for k in ["chặn", "block", "ufw", "cấm"]) and target_ip:
+            print("\n" + "-" * 65)
+            print(f"🛡️  THẨM ĐỊNH AN TOÀN TỪ POLICY ENGINE CHO HÀNH ĐỘNG CHẶN IP '{target_ip}':")
+            decision = evaluate_action(
+                action="block_ip",
+                target=target_ip,
+                context={
+                    "verdict": c.get("verdict"),
+                    "confidence": c.get("confidence"),
+                    "severity": c.get("severity"),
+                }
+            )
+            if not decision.allowed:
+                print(f"🛑 [BỊ TỪ CHỐI BẢO MẬT] {decision.reason}")
+                print(f"   Mức độ rủi ro: {decision.risk_level} -> Hủy bỏ hành động chặn.")
+            else:
+                print(f"✅ [CHẤP THUẬN AN TOÀN] {decision.reason}")
+                print(f"⚠️  Hành động có mức rủi ro {decision.risk_level}. Yêu cầu xác nhận con người (HITL).")
+                
+                try:
+                    confirm = input(f"👉 Bạn có đồng ý thực thi chặn IP '{target_ip}' trên UFW không? [y/N]: ").strip().lower()
+                except EOFError:
+                    confirm = "n"
+
+                if confirm == "y":
+                    print(f"[*] Đang thực thi lệnh chặn UFW và xác minh trên {HOST}...")
+                    exec_res = block_ip(target_ip)
+                    verify_res = verify_response(target_ip, expected_state="blocked")
+                    record_audit_log(
+                        action="block_ip",
+                        target=target_ip,
+                        operator="SOC Analyst (CLI HITL)",
+                        policy_decision=decision,
+                        execution_result=exec_res,
+                        verification_result=verify_res
+                    )
+                    if exec_res.get("status") == "ok":
+                        print(f"[+] {verify_res.get('data', {}).get('message', 'Thành công!')}")
+                    else:
+                        print(f"[-] Thất bại: {exec_res.get('error')}")
+                else:
+                    print("[*] Đã bỏ qua hành động phản ứng.")
+
+
+def cmd_firewall(args):
+    """Kiểm tra danh sách quy tắc UFW trên lab server."""
+    print(f"[*] Đang truy vấn trạng thái tường lửa UFW từ {HOST}...")
+    res = get_firewall_status()
+    if res.get("status") != "ok":
+        print(f"[-] Lỗi truy vấn: {res.get('error')}")
+        return
+
+    data = res.get("data", {})
+    print(f"\n[+] Trạng thái dịch vụ UFW: {'ACTIVE (Đang bật)' if data.get('active') else 'INACTIVE (Chưa bật)'}")
+    print(f"[+] Tổng số quy tắc: {data.get('total_rules', 0)}\n")
+
+    rules = data.get("rules", [])
+    if not rules:
+        print("    (Không có quy tắc tùy chỉnh nào trong bảng UFW)")
+        if data.get("raw_output"):
+            print(f"    Raw output: {data.get('raw_output')}")
+    else:
+        for r in rules:
+            print(f"  [{r.get('rule_num')}] {r.get('action'):<10} from {r.get('from'):<20} to {r.get('to')}")
+
+
+def cmd_block(args):
+    """Thực thi chặn IP thủ công qua Policy Engine."""
+    target_ip = args.ip
+    print(f"[*] Đang thẩm định hành động chặn IP '{target_ip}' qua Policy Engine...")
+    decision = evaluate_action("block_ip", target_ip)
+
+    if not decision.allowed:
+        print(f"\n🛑 [TỪ CHỐI BẢO MẬT] {decision.reason}")
+        sys.exit(1)
+
+    print(f"\n✅ [HỢP LỆ] {decision.reason}")
+    if not args.yes:
+        confirm = input(f"👉 Bạn có chắc chắn muốn áp dụng luật chặn IP '{target_ip}' không? [y/N]: ").strip().lower()
+        if confirm != "y":
+            print("[*] Đã hủy thao tác.")
+            return
+
+    print(f"[*] Đang gửi lệnh cấu hình UFW tới {HOST}...")
+    exec_res = block_ip(target_ip)
+    verify_res = verify_response(target_ip, expected_state="blocked")
+    record_audit_log(
+        action="block_ip",
+        target=target_ip,
+        operator="SOC Analyst (Manual CLI)",
+        policy_decision=decision,
+        execution_result=exec_res,
+        verification_result=verify_res
+    )
+    if exec_res.get("status") == "ok":
+        print(f"[+] {verify_res.get('data', {}).get('message')}")
+    else:
+        print(f"[-] Lỗi: {exec_res.get('error')}")
+
+
+def cmd_unblock(args):
+    """Gỡ bỏ quy tắc chặn IP trên UFW."""
+    target_ip = args.ip
+    print(f"[*] Đang kiểm tra IP '{target_ip}'...")
+    decision = evaluate_action("unblock_ip", target_ip)
+    if not decision.allowed:
+        print(f"[-] Cú pháp IP không hợp lệ: {decision.reason}")
+        return
+
+    print(f"[*] Đang gỡ bỏ quy tắc chặn IP '{target_ip}' trên {HOST}...")
+    exec_res = unblock_ip(target_ip)
+    verify_res = verify_response(target_ip, expected_state="unblocked")
+    record_audit_log(
+        action="unblock_ip",
+        target=target_ip,
+        operator="SOC Analyst (Manual Unblock)",
+        policy_decision=decision,
+        execution_result=exec_res,
+        verification_result=verify_res
+    )
+    if exec_res.get("status") == "ok":
+        print(f"[+] {verify_res.get('data', {}).get('message')}")
+    else:
+        print(f"[-] Lỗi: {exec_res.get('error')}")
 
 
 def cmd_ui(args):
@@ -123,6 +275,7 @@ def cmd_test(args):
     """Chạy toàn bộ các bộ kiểm thử trong thư mục tests/."""
     print("[*] Đang thực thi toàn bộ bài kiểm thử tự động trong tests/...\n")
     test_files = [
+        "tests/test_policy_engine.py",
         "tests/test_llm.py",
         "tests/test_detection_rules.py",
         "tests/test_tools.py",
@@ -136,7 +289,7 @@ def cmd_test(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🛡️ AI SOC Investigation Agent - Công cụ dòng lệnh hợp nhất (Unified CLI)",
+        description="🛡️ AI SOC Investigation & Defense Agent - Công cụ dòng lệnh hợp nhất (Unified CLI)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", help="Lệnh chức năng")
@@ -153,6 +306,21 @@ def main():
     p_inv.add_argument("-l", "--lines", type=int, default=1000, help="Số dòng log auth.log quét (mặc định: 1000)")
     p_inv.add_argument("-q", "--quiet", action="store_true", help="Ẩn các bước chạy chi tiết của tool")
     p_inv.set_defaults(func=cmd_investigate)
+
+    # Lệnh: firewall
+    p_fw = subparsers.add_parser("firewall", help="Xem trạng thái và các quy tắc tường lửa UFW")
+    p_fw.set_defaults(func=cmd_firewall)
+
+    # Lệnh: block
+    p_block = subparsers.add_parser("block", help="Chặn một IP có thẩm định an toàn qua Policy Engine")
+    p_block.add_argument("ip", type=str, help="Địa chỉ IP cần chặn")
+    p_block.add_argument("-y", "--yes", action="store_true", help="Tự động đồng ý không hỏi lại")
+    p_block.set_defaults(func=cmd_block)
+
+    # Lệnh: unblock
+    p_unblock = subparsers.add_parser("unblock", help="Gỡ chặn một IP trên UFW")
+    p_unblock.add_argument("ip", type=str, help="Địa chỉ IP cần gỡ chặn")
+    p_unblock.set_defaults(func=cmd_unblock)
 
     # Lệnh: ui
     p_ui = subparsers.add_parser("ui", help="Mở giao diện Web Dashboard (Streamlit UI)")
@@ -172,4 +340,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

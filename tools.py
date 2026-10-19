@@ -56,7 +56,7 @@ def search_auth_logs(src_ip=None, user=None, lines=500):
         return _ok(tool, {
             "filter": {"src_ip": src_ip, "user": user, "lines_scanned": lines},
             "summary": dict(summary),
-            "recent_events": [_event_to_dict(e) for e in events[-15:]],
+            "recent_events": [_event_to_dict(e) for e in events[-5:]],
         })
     except Exception as ex:
         return _err(tool, ex)
@@ -285,7 +285,158 @@ def inspect_cron_persistence():
         return _err(tool, ex)
 
 
-TOOLS = {
+# ==============================================================
+# 🛡️ LỚP PHẢN ỨNG CÓ KIỂM SOÁT (CONTROLLED RESPONSE TOOLS)
+# ==============================================================
+
+def get_firewall_status():
+    """Lấy danh sách các luật và trạng thái của tường lửa UFW từ máy chủ lab."""
+    tool = "get_firewall_status"
+    try:
+        out, err = run_fixed_command("sudo -n /usr/sbin/ufw status numbered")
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Yêu cầu mật khẩu sudo. Cần cấu hình NOPASSWD cho /usr/sbin/ufw trong /etc/sudoers.d/soc_agent_ufw")
+        
+        is_active = "Status: active" in out
+        rules = []
+        for line in out.splitlines():
+            line_str = line.strip()
+            # Định dạng: [ 1] Anywhere DENY IN 1.2.3.4
+            m = re.match(r"^\[\s*(\d+)\]\s+(.*?)\s+(ALLOW IN|DENY IN|ALLOW|DENY)\s+(.*)$", line_str)
+            if m:
+                rules.append({
+                    "rule_num": int(m.group(1)),
+                    "to": m.group(2).strip(),
+                    "action": m.group(3).strip(),
+                    "from": m.group(4).strip(),
+                    "raw": line_str
+                })
+        return _ok(tool, {
+            "active": is_active,
+            "raw_output": out.strip(),
+            "rules": rules,
+            "total_rules": len(rules)
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+def block_ip(ip: str):
+    """
+    Thực thi chặn IP trên tường lửa UFW (đưa lên vị trí ưu tiên đầu tiên).
+    Lưu ý: Lệnh này phải được thẩm định qua Policy Engine trước khi gọi!
+    """
+    tool = "block_ip"
+    try:
+        # Validate định dạng IP chặt chẽ trước khi truyền vào lệnh shell
+        ipaddress.ip_address(ip.strip())
+        clean_ip = ip.strip()
+
+        # Thực hiện chèn rule vào đầu bảng (insert 1) để có độ ưu tiên cao nhất
+        cmd = f"sudo -n /usr/sbin/ufw insert 1 deny from {clean_ip} to any"
+        out, err = run_fixed_command(cmd)
+
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Lỗi phân quyền sudo: agent_soc chưa có quyền NOPASSWD cho /usr/sbin/ufw")
+
+        if "Rule inserted" in out or "Rule updated" in out or "Rule added" in out:
+            return _ok(tool, {
+                "blocked_ip": clean_ip,
+                "command": cmd,
+                "ufw_message": out.strip()
+            })
+        else:
+            return _err(tool, f"UFW không áp dụng được luật: {out.strip() or err.strip()}")
+    except ValueError:
+        return _err(tool, f"Địa chỉ IP '{ip}' không hợp lệ")
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+def unblock_ip(ip: str):
+    """Gỡ bỏ quy tắc chặn IP trên tường lửa UFW (Hoàn tác / Rollback)."""
+    tool = "unblock_ip"
+    try:
+        ipaddress.ip_address(ip.strip())
+        clean_ip = ip.strip()
+
+        cmd = f"sudo -n /usr/sbin/ufw delete deny from {clean_ip}"
+        out, err = run_fixed_command(cmd)
+
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Lỗi phân quyền sudo: agent_soc chưa có quyền NOPASSWD cho /usr/sbin/ufw")
+
+        if "Rule deleted" in out:
+            return _ok(tool, {
+                "unblocked_ip": clean_ip,
+                "command": cmd,
+                "ufw_message": out.strip()
+            })
+        elif "Could not find a rule to delete" in out or "Rule not found" in out or not out.strip():
+            return _err(tool, f"Không tìm thấy quy tắc chặn cho IP {clean_ip} để xóa")
+        else:
+            return _ok(tool, {
+                "unblocked_ip": clean_ip,
+                "command": cmd,
+                "ufw_message": out.strip()
+            })
+    except ValueError:
+        return _err(tool, f"Địa chỉ IP '{ip}' không hợp lệ")
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+def verify_response(ip: str, expected_state="blocked"):
+    """
+    Xác minh xem hành động phản ứng trên tường lửa UFW đã thực sự có hiệu lực hay chưa.
+    expected_state: 'blocked' (phải tồn tại rule DENY) hoặc 'unblocked' (không còn rule DENY).
+    """
+    tool = "verify_response"
+    try:
+        clean_ip = ip.strip()
+        fw_status = get_firewall_status()
+        if fw_status.get("status") != "ok":
+            return _err(tool, f"Không đọc được trạng thái UFW: {fw_status.get('error')}")
+
+        data = fw_status.get("data", {})
+        rules = data.get("rules", [])
+
+        matching_deny_rules = [
+            r for r in rules
+            if clean_ip in r.get("from", "") and "DENY" in r.get("action", "")
+        ]
+
+        is_present = len(matching_deny_rules) > 0
+
+        if expected_state == "blocked":
+            verified = is_present
+            message = (
+                f"Xác minh THÀNH CÔNG: IP {clean_ip} đã bị chặn bởi {len(matching_deny_rules)} luật trong UFW."
+                if verified else
+                f"Xác minh THẤT BẠI: Không tìm thấy luật DENY cho IP {clean_ip} trong UFW."
+            )
+        else: # unblocked
+            verified = not is_present
+            message = (
+                f"Xác minh THÀNH CÔNG: IP {clean_ip} đã được gỡ bỏ hoàn toàn khỏi bảng chặn của UFW."
+                if verified else
+                f"Xác minh THẤT BẠI: Vẫn còn luật DENY đối với IP {clean_ip} trong UFW."
+            )
+
+        return _ok(tool, {
+            "ip": clean_ip,
+            "expected_state": expected_state,
+            "verified": verified,
+            "rules_found": matching_deny_rules,
+            "message": message,
+            "ufw_active": data.get("active", False)
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+# Danh mục các công cụ điều tra của Agent (Read-Only)
+INVESTIGATION_TOOLS = {
     "search_auth_logs": search_auth_logs,
     "inspect_user_changes": inspect_user_changes,
     "check_ssh_config": check_ssh_config,
@@ -293,3 +444,14 @@ TOOLS = {
     "inspect_network_connections": inspect_network_connections,
     "inspect_cron_persistence": inspect_cron_persistence,
 }
+
+# Danh mục các công cụ phản ứng (Active Response - Cần thẩm định Policy & HITL)
+RESPONSE_TOOLS = {
+    "get_firewall_status": get_firewall_status,
+    "block_ip": block_ip,
+    "unblock_ip": unblock_ip,
+    "verify_response": verify_response,
+}
+
+# Tương thích ngược
+TOOLS = dict(INVESTIGATION_TOOLS)

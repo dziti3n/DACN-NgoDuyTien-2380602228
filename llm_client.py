@@ -1,8 +1,15 @@
+"""
+llm_client.py - Lớp tương tác mô hình ngôn ngữ cục bộ (Local LLM Client) qua Ollama.
+Hệ thống được thiết kế theo chuẩn bảo mật đóng (Air-Gapped / Pure Local),
+đảm bảo 100% dữ liệu điều tra không bao giờ rời khỏi máy tính cục bộ.
+"""
+
 import json
 import os
 import re
-import time
 import sys
+import time
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,9 +21,11 @@ class LLMError(Exception):
 
 
 def parse_json(text):
-    """Trích xuất và parse JSON từ phản hồi LLM an toàn, loại bỏ think tag, markdown fence nếu có."""
+    """Trích xuất và parse JSON từ phản hồi LLM an toàn.
+    Tự động bóc tách reasoning tag <think>...</think> và markdown code blocks nếu có.
+    """
     text = (text or "").strip()
-    # Loại bỏ reasoning tag <think>...</think> nếu có từ các dòng model Qwen / DeepSeek
+    # Loại bỏ reasoning tag <think>...</think> (đặc thù của dòng mô hình Qwen / DeepSeek)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     # Loại bỏ code block ```json ... ```
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.DOTALL).strip()
@@ -30,94 +39,42 @@ def parse_json(text):
         raise
 
 
-class GeminiClient:
-    """Client giao tiếp với Google Gemini qua google-genai SDK.
-    Hỗ trợ tự động Exponential Backoff khi gặp 429/503 và Fallback sang model phụ.
+class OllamaLocalClient:
+    """Client giao tiếp trực tiếp với dịch vụ Ollama cục bộ.
+    Được khóa cứng chỉ cho phép kết nối localhost/127.0.0.1 để chống rò rỉ dữ liệu.
     """
 
-    DEFAULT_FALLBACKS = [
-        "gemini-3.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-3.5-flash",
-        "gemini-3.8-flash",
-    ]
+    ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
 
-    def __init__(self, model=None):
-        from google import genai
-        key = os.getenv("LLM_API_KEY")
-        if not key:
-            raise LLMError("Thiếu LLM_API_KEY trong file .env")
-        self.client = genai.Client(api_key=key)
-        self.primary_model = model or os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
-        
-        env_fallbacks = os.getenv("LLM_FALLBACK_MODELS")
-        if env_fallbacks:
-            self.fallback_models = [m.strip() for m in env_fallbacks.split(",") if m.strip()]
-        else:
-            self.fallback_models = [m for m in self.DEFAULT_FALLBACKS if m != self.primary_model]
-
-        self.model = self.primary_model
-        self.last_model_used = self.primary_model
-
-    def generate(self, system, user, retries=2):
-        from google.genai import types
-
-        # Danh sách các model sẽ lần lượt thử nếu model trước đó bị 429 / 503
-        candidate_models = [self.model] + [m for m in self.fallback_models if m != self.model]
-        last_error = None
-
-        for model_name in candidate_models:
-            for attempt in range(retries + 1):
-                try:
-                    resp = self.client.models.generate_content(
-                        model=model_name,
-                        contents=user,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system,
-                            response_mime_type="application/json",
-                            temperature=0.2,
-                        ),
-                    )
-                    self.last_model_used = model_name
-                    self.model = model_name
-                    return parse_json(resp.text)
-                except Exception as ex:
-                    last_error = ex
-                    err_str = str(ex)
-                    is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-                    is_unavailable = "503" in err_str or "UNAVAILABLE" in err_str
-
-                    if (is_rate_limit or is_unavailable) and attempt < retries:
-                        # Exponential backoff: 4s, 8s, ...
-                        delay = 4 * (attempt + 1)
-                        status_name = "429 Rate Limit" if is_rate_limit else "503 Quá tải"
-                        print(f"  [Gemini] {status_name} trên '{model_name}'. Đang chờ {delay}s trước khi thử lại (lần {attempt + 1}/{retries})...")
-                        time.sleep(delay)
-                    else:
-                        break  # Hết lượt retry cho model này hoặc là lỗi khác, chuyển sang fallback model
-
-            print(f"  [Gemini] Model '{model_name}' không thành công. Thử model dự phòng...")
-
-        raise LLMError(f"Gọi Gemini thất bại qua các model {candidate_models}: {str(last_error)[:300]}")
-
-
-class OpenAICompatibleClient:
-    """Client giao tiếp với bất kỳ API nào chuẩn OpenAI (Ollama, Groq, DeepSeek, OpenAI)."""
-
-    def __init__(self, base_url, api_key=None, model="default"):
+    def __init__(self, base_url=None, model=None, seed=42):
         import httpx
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or "none"
-        self.model = model
-        self.last_model_used = model
-        self.client = httpx.Client(timeout=180.0)
 
-    def generate(self, system, user, retries=2):
+        raw_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+        self.base_url = raw_url.rstrip("/")
+        
+        parsed = urlparse(self.base_url)
+        hostname = (parsed.hostname or "").lower()
+        if hostname not in self.ALLOWED_HOSTS:
+            raise LLMError(
+                f"Chính sách bảo mật Local-Only: Từ chối kết nối tới '{hostname}'. "
+                f"Hệ thống chỉ cho phép kết nối Ollama tại localhost hoặc 127.0.0.1."
+            )
+
+        self.model = model or os.getenv("OLLAMA_MODEL", "qwen3:4b")
+        self.last_model_used = self.model
+        self.seed = int(os.getenv("OLLAMA_SEED", str(seed)))
+        self.temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.0"))
+        
+        # Timeout 120s cho mỗi lượt gọi LLM
+        self.client = httpx.Client(timeout=120.0)
+
+    def generate(self, system, user, retries=1):
+        """Gửi prompt tới Ollama qua OpenAI-compatible chat endpoint với temperature=0 và seed cố định."""
         import httpx
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": "Bearer ollama",
         }
         payload = {
             "model": self.model,
@@ -125,8 +82,8 @@ class OpenAICompatibleClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
+            "temperature": self.temperature,
+            "seed": self.seed,
         }
 
         url = f"{self.base_url}/chat/completions"
@@ -135,11 +92,6 @@ class OpenAICompatibleClient:
         for attempt in range(retries + 1):
             try:
                 resp = self.client.post(url, headers=headers, json=payload)
-                if resp.status_code == 429:
-                    delay = 4 * (attempt + 1)
-                    print(f"  [OpenAI API] 429 Rate limit tại {self.base_url}. Đang chờ {delay}s...")
-                    time.sleep(delay)
-                    continue
                 resp.raise_for_status()
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"]
@@ -147,48 +99,21 @@ class OpenAICompatibleClient:
                 return parse_json(content)
             except httpx.ConnectError as ex:
                 raise LLMError(
-                    f"Không thể kết nối đến máy chủ LLM tại '{self.base_url}'. "
-                    f"Nếu dùng Ollama, hãy đảm bảo service đã được bật ('ollama serve'). Chi tiết: {ex}"
+                    f"Không thể kết nối đến máy chủ Ollama tại '{self.base_url}'. "
+                    f"Vui lòng đảm bảo Ollama đang chạy (gõ 'ollama serve' hoặc bật ứng dụng Ollama). Chi tiết: {ex}"
                 )
             except Exception as ex:
                 last_error = ex
                 if attempt < retries:
-                    time.sleep(2 * (attempt + 1))
+                    time.sleep(1.0)
 
-        raise LLMError(f"Gọi mô hình ({self.model}) thất bại: {str(last_error)[:300]}")
+        raise LLMError(f"Gọi mô hình Local ({self.model}) thất bại sau {retries + 1} lần: {str(last_error)[:300]}")
+
+
+# Alias tương thích ngược
+GeminiClient = OllamaLocalClient
 
 
 def get_llm_client(provider=None, model=None):
-    """Factory khởi tạo client dựa trên cấu hình LLM_PROVIDER trong file .env.
-    Hỗ trợ:
-      - 'ollama' (Local LLM qua http://localhost:11434/v1)
-      - 'gemini' (Google Gemini API)
-      - 'groq'   (Miễn phí, siêu nhanh qua https://api.groq.com/openai/v1)
-      - 'openai' (Hoặc tương thích)
-    """
-    prov = (provider or os.getenv("LLM_PROVIDER", "ollama")).lower().strip()
-
-    if prov == "ollama":
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        m = model or os.getenv("OLLAMA_MODEL", "qwen3:4b")
-        return OpenAICompatibleClient(base_url=base_url, api_key="ollama", model=m)
-
-    if prov == "groq":
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise LLMError("Thiếu GROQ_API_KEY trong file .env khi chọn provider 'groq'.")
-        m = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-        return OpenAICompatibleClient(
-            base_url="https://api.groq.com/openai/v1", api_key=api_key, model=m
-        )
-
-    if prov == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise LLMError("Thiếu OPENAI_API_KEY trong file .env khi chọn provider 'openai'.")
-        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        m = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        return OpenAICompatibleClient(base_url=base_url, api_key=api_key, model=m)
-
-    # Mặc định là Gemini
-    return GeminiClient(model=model)
+    """Factory khởi tạo client cục bộ duy nhất cho toàn bộ hệ thống."""
+    return OllamaLocalClient(model=model)

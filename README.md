@@ -1,8 +1,8 @@
-# 🛡️ AI SOC Investigation Agent
+# 🛡️ AI SOC Investigation & Defense Agent
 
-Hệ thống tác tử AI (Autonomous Security Investigation Agent) tự động điều tra cảnh báo an ninh mạng trên máy chủ Linux sử dụng kiến trúc **ReAct (Reasoning + Acting)** an toàn.
+Hệ thống tác tử AI (Autonomous Security Investigation & Controlled Defense Agent) tự động điều tra cảnh báo an ninh mạng và thực thi phản ứng có kiểm soát trên máy chủ Linux sử dụng kiến trúc **ReAct (Reasoning + Acting)** an toàn.
 
-Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động kết nối đến máy chủ mục tiêu qua kênh SSH chỉ đọc (Read-only), thu thập chứng cứ, phân tích nhật ký, đối chiếu với cấu hình an toàn chuẩn (Baseline) và đưa ra kết luận điều tra toàn diện bằng tiếng Việt.
+Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động kết nối đến máy chủ mục tiêu qua kênh SSH chỉ đọc (Read-only), thu thập chứng cứ, phân tích nhật ký, đối chiếu với cấu hình an toàn chuẩn (Baseline) và đưa ra kết luận điều tra toàn diện bằng tiếng Việt. Sau khi điều tra, các đề xuất phản ứng chủ động (Active Defense) được đưa qua **Lớp Kiểm soát Chính sách (Policy Engine Guardrails)** độc lập và cơ chế **Phê duyệt Con người (Human-in-the-Loop)** trước khi áp dụng luật chặn trên tường lửa UFW.
 
 ---
 
@@ -10,19 +10,28 @@ Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động k
 
 1. **Kiến trúc ReAct Agent có kiểm soát:**
    - Hoạt động theo chu trình: *Nhận cảnh báo ➔ Suy luận (Reason) ➔ Gọi công cụ (Tool Call) ➔ Nhận dữ liệu (Observation) ➔ Đưa ra kết luận (Conclude)*.
-   - Giới hạn số bước tối đa (`MAX_STEPS = 6`) để tránh lặp vô tận và tối ưu chi phí token.
-   - Đầu ra chuẩn JSON có xác thực chặt chẽ (Schema validation).
+   - Giới hạn số bước tối đa (`MAX_STEPS = 6`) để tránh lặp vô tận và tối ưu hiệu năng.
+   - Đầu ra chuẩn JSON có xác thực cấu trúc nghiêm ngặt (Schema validation).
 
-2. **Phòng vệ Prompt Injection chủ động:**
-   - Toàn bộ kết quả từ log hệ thống và cấu hình máy chủ được bọc trong thẻ `<untrusted_tool_output>`.
-   - System prompt thiết lập ranh giới bảo mật nghiêm ngặt: Agent coi dữ liệu từ log là dữ liệu thô do kẻ tấn công có thể thao túng, tuyệt đối không thực thi bất kỳ chỉ thị nào ẩn trong log.
+2. **100% Local LLM (Air-Gapped & Zero Data Leakage):**
+   - Hệ thống vận hành hoàn toàn ngoại tuyến thông qua **Ollama** cục bộ (khuyên dùng `qwen3:4b` hoặc `qwen2.5:7b-instruct`).
+   - Khóa chặt kết nối chỉ trong phạm vi `127.0.0.1:11434`, tuyệt đối không gửi bất kỳ dữ liệu cảnh báo hay thông tin hệ thống nào ra ngoài Internet.
+   - Thiết lập `temperature=0.0` và `seed=42` cố định để đảm bảo tính **Tất định (Deterministic)** và độ tin cậy khoa học cao trong phân tích an ninh.
 
-3. **Multi-Provider LLM & Khả năng chịu lỗi cao:**
-   - **Google Gemini:** Tự động **Exponential Backoff** khi gặp lỗi nghẽn tốc độ (`429 RESOURCE_EXHAUSTED`) hoặc quá tải tạm thời (`503 UNAVAILABLE`), hỗ trợ danh sách **Fallback Models** tự động luân chuyển model dự phòng khi model chính lỗi.
-   - **Local LLM qua Ollama:** Hỗ trợ chạy offline 100% không cần Internet (ví dụ: `qwen2.5:7b-instruct`, `llama3.1:8b`).
-   - **Groq Cloud API:** Hỗ trợ inference siêu tốc (~300+ tokens/giây) cho các mô hình mã nguồn mở.
+3. **Lớp Kiểm soát Phản ứng Độc lập (Policy Engine Guardrails):**
+   - Mã nguồn Python xác định (Deterministic Rule-based), không phụ thuộc vào LLM để phòng vệ tuyệt đối chống **Prompt Injection**:
+     - **Whitelist Bảo vệ (Protected IPs):** Cấm tuyệt đối hành động chặn IP máy Host Windows (`192.168.56.1`), IP máy chủ lab (`192.168.56.101`) hoặc Loopback (`127.0.0.1`), ngăn chặn nguy cơ tự khóa mình ra khỏi hệ thống.
+     - **Chống Command Injection:** Kiểm tra cú pháp địa chỉ IP nghiêm ngặt bằng module `ipaddress`.
+     - **Ngưỡng Bằng chứng (Evidence Threshold):** Từ chối tự động các đề xuất chặn nếu kết luận điều tra là bình thường (`benign_likely`) hoặc thiếu dữ liệu (`insufficient_data`).
+     - **Human-in-the-Loop (HITL):** Mọi hành động làm thay đổi trạng thái mạng đều bắt buộc phải có sự xác nhận của chuyên viên SOC.
 
-4. **Bộ công cụ điều tra chỉ đọc (Read-Only Tools):**
+4. **Lớp Phản ứng Chủ động & Tường lửa (Active Response Tools):**
+   - `block_ip(ip)`: Thực thi lệnh chèn luật chặn `sudo ufw insert 1 deny from <ip>` lên đầu bảng tường lửa UFW.
+   - `unblock_ip(ip)`: Hoàn tác (Rollback) gỡ bỏ quy tắc chặn IP nhanh chóng khi cần.
+   - `verify_response(ip, expected_state)`: Tự động truy vấn `ufw status numbered` để xác minh độc lập xem luật đã thực sự có hiệu lực trên máy chủ hay chưa.
+   - `get_firewall_status()`: Trích xuất toàn bộ bảng quy tắc tường lửa đang hoạt động trên máy chủ lab.
+
+5. **Bộ công cụ điều tra chỉ đọc (Read-Only Tools):**
    - `search_auth_logs`: Quét và lọc sự kiện xác thực SSH/sudo theo IP nguồn và tài khoản.
    - `inspect_user_changes`: Kiểm tra danh sách người dùng thường, thành viên nhóm `sudo`, đối chiếu với `baseline.json` để phát hiện user lạ hoặc leo thang quyền trái phép.
    - `check_ssh_config`: Đọc và phân tích các tham số cấu hình SSH then chốt (`PermitRootLogin`, `PasswordAuthentication`, `MaxAuthTries`).
@@ -30,19 +39,8 @@ Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động k
    - `inspect_network_connections`: Phân tích các cổng đang mở lắng nghe (Listening services) và các kết nối mạng đang hoạt động (Established) để phát hiện backdoor listener hoặc kết nối C2 outbound.
    - `inspect_cron_persistence`: Kiểm tra toàn diện crontab hệ thống (`/etc/crontab`, `/etc/cron.d/*`, các script định kỳ) để phát hiện cơ chế cắm chốt duy trì quyền truy cập (persistence).
 
-5. **Động cơ phát hiện sự cố đa lớp (Multi-Rule Detection Engine):**
-   - `detect_ssh_bruteforce`: Phát hiện các đợt tấn công dò mật khẩu SSH dồn dập, tự động nhận diện các phiên đăng nhập thành công sau chuỗi thất bại.
-   - `detect_sudo_abuse`: Phát hiện các hành vi lạm dụng đặc quyền sudo: tài khoản không có quyền cố tình gõ sudo (`user NOT in sudoers`), nhập sai mật khẩu sudo dồn dập, hoặc thực thi các lệnh nhạy cảm cao (spawn root shell, đọc `/etc/shadow`, xóa log).
-   - `detect_baseline_account_tampering`: Tự động đối chiếu với `baseline.json` để phát hiện tạo tài khoản lạ hoặc gán nhóm đặc quyền (`sudo`, `wheel`, `root`) trái phép.
-   - `detect_all`: Hợp nhất tất cả các quy tắc phát hiện trên toàn bộ dòng sự kiện log.
-
-6. **Báo cáo kết luận chuẩn SOC:**
-   - Phân loại rõ ràng:
-     - **Verdict:** `malicious_activity_likely` | `suspicious_needs_more_data` | `benign_likely` | `insufficient_data`
-     - **Severity:** `info` | `low` | `medium` | `high` | `critical`
-     - **Confidence:** `low` | `medium` | `high`
-   - Báo cáo chi tiết bằng chứng đã xác minh, dữ liệu còn thiếu và đề xuất hành động xử lý (Remediation proposals).
-   - Tự động lưu vết toàn bộ phiên điều tra thành file JSON trong thư mục `runs/`.
+6. **Nhật ký Kiểm toán không thể chối bỏ (Audit Trail):**
+   - Tự động ghi lại toàn bộ hành động phản ứng (thành công, thất bại hoặc bị Policy Engine từ chối) vào cả `runs/action_audit.log` (định dạng văn bản) và `runs/audit_trail.jsonl` (chuẩn JSON Lines cho SIEM).
 
 ---
 
@@ -51,33 +49,39 @@ Agent đóng vai trò như một **SOC Analyst Tier 1 / Tier 2**, tự động k
 ```text
 soc-agent/
 ├── agent.py            # Vòng lặp ReAct, System Prompt & quy tắc phân loại điều tra
-├── tools.py            # Bộ công cụ điều tra an toàn (read-only)
-├── detection.py        # Bộ quy tắc phát hiện sự cố (SSH Bruteforce detector)
+├── policy_engine.py    # Lớp kiểm soát chính sách an toàn (Guardrails, Whitelist, Audit Trail)
+├── tools.py            # 6 Công cụ điều tra chỉ đọc + 4 Công cụ phản ứng tường lửa UFW
+├── detection.py        # Bộ quy tắc phát hiện sự cố (SSH Bruteforce, Sudo Abuse, Baseline Tampering)
 ├── log_parser.py       # Bộ phân tích cú pháp nhật ký /var/log/auth.log
-├── read_logs.py        # Module kết nối SSH (Paramiko) để thực thi lệnh đọc log cố định
-├── llm_client.py       # Lớp tương tác LLM đa nền tảng (Gemini, Ollama, Groq)
-├── app.py              # Giao diện Web Dashboard (Streamlit) trực quan hóa điều tra
-├── cli.py              # Công cụ dòng lệnh hợp nhất (Scan, Investigate, UI, Test)
+├── read_logs.py        # Module kết nối SSH (Paramiko) để thực thi lệnh cố định
+├── llm_client.py       # Lớp tương tác mô hình LLM cục bộ (Ollama Local Client - Air-Gapped)
+├── app.py              # Giao diện Web Dashboard (Streamlit) với 4 Tabs giám sát & phản ứng
+├── cli.py              # Công cụ dòng lệnh hợp nhất (Scan, Investigate, Firewall, Block, UI, Test)
 ├── baseline.json       # Danh sách tài khoản và nhóm quyền được phê duyệt chuẩn
 ├── security_audit.py   # Công cụ tự động quét chống rò rỉ Secret / API Key
-├── tests/              # Thư mục chứa toàn bộ bộ kiểm thử tự động
+├── tests/              # Toàn bộ bộ kiểm thử tự động
+│   ├── test_policy_engine.py   # Kiểm thử Whitelist, Chống Injection & Ngưỡng bằng chứng (9 test cases)
 │   ├── test_detection_rules.py # Kiểm thử 11 kịch bản phát hiện tấn công
-│   ├── test_llm.py     # Kiểm thử kết nối mô hình LLM (Ollama/Cloud)
-│   └── test_tools.py   # Kiểm thử 6 công cụ điều tra trên server lab
+│   ├── test_llm.py             # Kiểm thử kết nối mô hình LLM cục bộ (Ollama qwen3:4b)
+│   └── test_tools.py           # Kiểm thử 6 công cụ điều tra trên server lab
 ├── requirements.txt    # Danh sách thư viện Python cần thiết
 ├── .env.example        # Mẫu cấu hình biến môi trường
-└── runs/               # Thư mục lưu vết các phiên điều tra (JSON logs)
+└── runs/               # Lưu vết các phiên điều tra (JSON) và nhật ký kiểm toán (Audit logs)
 ```
 
 ---
 
-## 🚀 Hướng dẫn cài đặt & Chạy thử nghiệm
+## 🚀 Hướng dẫn cài đặt & Cấu hình
 
 ### 1. Yêu cầu hệ thống
 - Python 3.10+
-- Máy ảo Linux chạy SSH (Lab) để Agent kết nối thu thập log (hoặc cấu hình tương thích).
+- Máy ảo Linux (Ubuntu/Debian) đóng vai trò máy chủ Lab kết nối qua SSH.
+- [Ollama](https://ollama.com/) cài đặt sẵn trên máy host với mô hình `qwen3:4b`:
+  ```bash
+  ollama run qwen3:4b
+  ```
 
-### 2. Cài đặt môi trường
+### 2. Cài đặt môi trường Python
 ```bash
 # Tạo môi trường ảo
 python -m venv .venv
@@ -92,77 +96,87 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Cấu hình biến môi trường
-Sao chép file `.env.example` thành `.env`:
-```bash
-cp .env.example .env
+### 3. Cấu hình biến môi trường `.env`
+Sao chép `.env.example` thành `.env`:
+```ini
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+OLLAMA_MODEL=qwen3:4b
+OLLAMA_SEED=42
+OLLAMA_TEMPERATURE=0.0
+
+# Kết nối SSH tới máy ảo Lab
+SSH_HOST=192.168.56.101
+SSH_PORT=22
+SSH_USER=agent_soc
+SSH_KEY_PATH=~/.ssh/soc_agent_key
 ```
 
-Mở `.env` để chọn chế độ chạy:
-- **Chạy Local 100% bằng Ollama (Không cần mạng, không tốn tiền):**
-  ```ini
-  LLM_PROVIDER=ollama
-  OLLAMA_BASE_URL=http://localhost:11434/v1
-  OLLAMA_MODEL=qwen3:4b
-  ```
-- **Hoặc chạy bằng Cloud API (Gemini):**
-  ```ini
-  LLM_PROVIDER=gemini
-  LLM_API_KEY=your_gemini_api_key_here
-  LLM_MODEL=gemini-3.5-flash-lite
-  ```
+### 4. Cấu hình phân quyền đặc quyền tối thiểu (Least Privilege) trên Máy ảo Lab
+Để tài khoản `agent_soc` có thể thực thi các lệnh tường lửa UFW mà không cần gõ mật khẩu (và không được phép sudo bừa bãi), hãy chạy lệnh sau một lần duy nhất trên máy ảo Linux:
 
-### 4. Chạy kiểm thử hệ thống
 ```bash
-# Kiểm tra kết nối mô hình LLM
-python tests/test_llm.py
-
-# Kiểm thử các quy tắc phát hiện tấn công
-python tests/test_detection_rules.py
-
-# Quét kiểm tra an toàn chống lộ Secret/Key
-python security_audit.py
+# Đăng nhập vào máy ảo Linux và cấp quyền tối thiểu cho UFW:
+echo 'agent_soc ALL=(ALL) NOPASSWD: /usr/sbin/ufw' | sudo tee /etc/sudoers.d/soc_agent_ufw
+sudo chmod 0440 /etc/sudoers.d/soc_agent_ufw
 ```
 
-### 5. Sử dụng Công cụ Dòng lệnh Hợp nhất (Unified CLI)
-Hệ thống cung cấp file `cli.py` giúp bạn thực hiện mọi thao tác trên terminal một cách thuận tiện:
+---
 
+## 🛠️ Hướng dẫn sử dụng
+
+### 1. Sử dụng Công cụ Dòng lệnh Hợp nhất (`cli.py`)
 ```bash
-# Quét và hiển thị toàn bộ cảnh báo an ninh trên máy chủ lab
+# 1. Quét và hiển thị toàn bộ cảnh báo an ninh trên máy chủ lab
 python cli.py scan
 
-# Điều tra tự động cảnh báo mới nhất
+# 2. Agent tự động điều tra cảnh báo mới nhất
 python cli.py investigate
 
-# Điều tra một cảnh báo cụ thể theo số thứ tự (ví dụ cảnh báo #1)
-python cli.py investigate 1
+# 3. Điều tra cảnh báo cụ thể theo số thứ tự (ví dụ: cảnh báo #0)
+python cli.py investigate 0
 
-# Chạy toàn bộ các bài kiểm thử tự động
+# 4. Xem bảng trạng thái tường lửa UFW trên máy chủ lab
+python cli.py firewall
+
+# 5. Chặn một IP có thẩm định an toàn qua Policy Engine
+python cli.py block 198.51.100.22
+
+# Thử nghiệm chặn IP Host Windows (Policy Engine sẽ chặn đứng ngay lập tức):
+python cli.py block 192.168.56.1
+
+# 6. Gỡ chặn một IP trên UFW
+python cli.py unblock 198.51.100.22
+
+# 7. Chạy toàn bộ các bài kiểm thử tự động
 python cli.py test
 
-# Mở nhanh giao diện Web Dashboard
+# 8. Khởi chạy Giao diện Web Dashboard
 python cli.py ui
 ```
 
-### 6. Khởi chạy Giao diện Web Dashboard (Streamlit UI)
-Bạn có thể mở giao diện Web qua lệnh:
+### 2. Giao diện Web Dashboard (`app.py`)
+Khởi chạy bảng điều khiển trực quan:
 ```bash
 python cli.py ui
 # hoặc
 streamlit run app.py
 ```
-Trình duyệt sẽ tự động mở bảng điều khiển trực quan tại địa chỉ `http://localhost:8501`.
+Giao diện bao gồm 4 Tabs chuyên nghiệp:
+- **Tab 1: Cảnh báo & Điều tra (Alerts & Investigation):** Xem danh sách cảnh báo, kích hoạt ReAct Agent, hiển thị chuỗi suy luận từng bước, kết luận và nút phê duyệt chặn IP (HITL) được bảo vệ bởi Policy Engine.
+- **Tab 2: Lịch sử các ca điều tra (Run History):** Xem lại toàn bộ các phiên điều tra đã lưu vết trong thư mục `runs/`.
+- **Tab 3: Bộ công cụ điều tra (Investigation Toolkit):** Cho phép chuyên viên gọi thử nghiệm từng công cụ điều tra chỉ đọc.
+- **Tab 4: Phản ứng có kiểm soát & Tường lửa (Active Defense):** Quản lý trực tiếp các luật UFW trên lab server, thử nghiệm Policy Engine và theo dõi bảng Nhật ký Kiểm toán (Audit Trail Log).
 
 ---
 
-## 🔒 Nguyên tắc An toàn (Safety Principles)
+## 🔒 Nguyên tắc An toàn Cốt lõi (Core Security Principles)
 
-- **Không bao giờ trao quyền shell tự do cho LLM:** Agent chỉ được phép gọi các hàm Python đã được định nghĩa sẵn (`search_auth_logs`, `inspect_user_changes`, `check_ssh_config`) với đối số được kiểm tra kiểu chặt chẽ.
-- **Hành động phản ứng chỉ mang tính đề xuất:** Agent không tự ý chạy các lệnh thay đổi cấu hình hoặc chặn IP (`iptables`/`ufw`) trên máy chủ mà chỉ đưa ra phương án để con người (Human-in-the-Loop) phê duyệt.
-- **Bảo mật tuyệt đối Secret:** Các khóa bí mật (API Key, SSH Private Key) được quản lý qua biến môi trường và luôn bị loại trừ khỏi Git theo `.gitignore`.
+1. **Deterministic Guardrails First:** Mọi quyết định can thiệp hệ thống (chặn IP, ngắt kết nối) đều phải qua mã nguồn Python xác định (Policy Engine). Không bao giờ tin tưởng tuyệt đối vào kết quả sinh của mô hình ngôn ngữ lớn (LLM).
+2. **Nguyên tắc Đặc quyền Tối thiểu (Principle of Least Privilege):** Agent chỉ được cấp quyền sudo đối với đúng binary `/usr/sbin/ufw`, không được cấp sudo toàn quyền (`ALL=(ALL)`).
+3. **Auditability & Accountability:** Mọi thao tác đều được lưu vết chi tiết với định danh người phê duyệt, thời điểm và kết quả xác minh.
 
 ---
 
-## 📜 Giấy phép
-Dự án được phát hành dưới giấy phép MIT License.
-
+## 📜 Tác giả
+Dự án được phát triển bởi **Duy Tiến**.
