@@ -33,7 +33,13 @@ from policy_engine import (
     record_audit_log,
     is_protected_ip,
     validate_ip,
+    save_active_block,
+    remove_active_block,
+    load_active_blocks,
+    DEFAULT_BLOCK_TTL_MINUTES,
 )
+from notifier import send_test_email, get_email_config
+from monitor_daemon import SOCMonitorDaemon
 
 
 def extract_ip(text):
@@ -146,6 +152,8 @@ def cmd_investigate(args):
                 action="block_ip",
                 target=target_ip,
                 context={
+                    "alert": alert,
+                    "evidence": c.get("evidence", []),
                     "verdict": c.get("verdict"),
                     "confidence": c.get("confidence"),
                     "severity": c.get("severity"),
@@ -159,12 +167,12 @@ def cmd_investigate(args):
                 print(f"⚠️  Hành động có mức rủi ro {decision.risk_level}. Yêu cầu xác nhận con người (HITL).")
                 
                 try:
-                    confirm = input(f"👉 Bạn có đồng ý thực thi chặn IP '{target_ip}' trên UFW không? [y/N]: ").strip().lower()
+                    confirm = input(f"👉 Bạn có đồng ý thực thi chặn IP '{target_ip}' ({DEFAULT_BLOCK_TTL_MINUTES} phút) trên UFW không? [y/N]: ").strip().lower()
                 except EOFError:
                     confirm = "n"
 
                 if confirm == "y":
-                    print(f"[*] Đang thực thi lệnh chặn UFW và xác minh trên {HOST}...")
+                    print(f"[*] Đang thực thi Wrapper Script chặn UFW và xác minh trên {HOST}...")
                     exec_res = block_ip(target_ip)
                     verify_res = verify_response(target_ip, expected_state="blocked")
                     record_audit_log(
@@ -176,7 +184,10 @@ def cmd_investigate(args):
                         verification_result=verify_res
                     )
                     if exec_res.get("status") == "ok":
+                        save_active_block(target_ip, ttl_minutes=DEFAULT_BLOCK_TTL_MINUTES, reason=decision.reason)
                         print(f"[+] {verify_res.get('data', {}).get('message', 'Thành công!')}")
+                        if verify_res.get("data", {}).get("ufw_warning"):
+                            print(f"[-] {verify_res['data']['ufw_warning']}")
                     else:
                         print(f"[-] Thất bại: {exec_res.get('error')}")
                 else:
@@ -184,7 +195,7 @@ def cmd_investigate(args):
 
 
 def cmd_firewall(args):
-    """Kiểm tra danh sách quy tắc UFW trên lab server."""
+    """Kiểm tra danh sách quy tắc UFW và danh sách IP đang cách ly trên lab server."""
     print(f"[*] Đang truy vấn trạng thái tường lửa UFW từ {HOST}...")
     res = get_firewall_status()
     if res.get("status") != "ok":
@@ -204,6 +215,13 @@ def cmd_firewall(args):
         for r in rules:
             print(f"  [{r.get('rule_num')}] {r.get('action'):<10} from {r.get('from'):<20} to {r.get('to')}")
 
+    # Hiển thị các IP đang cách ly có thời hạn (TTL)
+    active_blocks = load_active_blocks()
+    if active_blocks:
+        print(f"\n[+] Danh sách IP đang cách ly có thời hạn (Active Blocks & TTL):")
+        for b_ip, b_info in active_blocks.items():
+            print(f"  - 🔒 {b_ip} (Hết hạn lúc: {b_info.get('expires_at')}, TTL: {b_info.get('ttl_minutes')}p)")
+
 
 def cmd_block(args):
     """Thực thi chặn IP thủ công qua Policy Engine."""
@@ -217,12 +235,12 @@ def cmd_block(args):
 
     print(f"\n✅ [HỢP LỆ] {decision.reason}")
     if not args.yes:
-        confirm = input(f"👉 Bạn có chắc chắn muốn áp dụng luật chặn IP '{target_ip}' không? [y/N]: ").strip().lower()
+        confirm = input(f"👉 Bạn có chắc chắn muốn áp dụng luật chặn IP '{target_ip}' ({DEFAULT_BLOCK_TTL_MINUTES} phút) không? [y/N]: ").strip().lower()
         if confirm != "y":
             print("[*] Đã hủy thao tác.")
             return
 
-    print(f"[*] Đang gửi lệnh cấu hình UFW tới {HOST}...")
+    print(f"[*] Đang gửi lệnh cấu hình UFW tới {HOST} qua Wrapper Script...")
     exec_res = block_ip(target_ip)
     verify_res = verify_response(target_ip, expected_state="blocked")
     record_audit_log(
@@ -234,7 +252,10 @@ def cmd_block(args):
         verification_result=verify_res
     )
     if exec_res.get("status") == "ok":
+        save_active_block(target_ip, ttl_minutes=DEFAULT_BLOCK_TTL_MINUTES, reason=decision.reason)
         print(f"[+] {verify_res.get('data', {}).get('message')}")
+        if verify_res.get("data", {}).get("ufw_warning"):
+            print(f"[-] {verify_res['data']['ufw_warning']}")
     else:
         print(f"[-] Lỗi: {exec_res.get('error')}")
 
@@ -251,6 +272,7 @@ def cmd_unblock(args):
     print(f"[*] Đang gỡ bỏ quy tắc chặn IP '{target_ip}' trên {HOST}...")
     exec_res = unblock_ip(target_ip)
     verify_res = verify_response(target_ip, expected_state="unblocked")
+    remove_active_block(target_ip)
     record_audit_log(
         action="unblock_ip",
         target=target_ip,
@@ -265,6 +287,40 @@ def cmd_unblock(args):
         print(f"[-] Lỗi: {exec_res.get('error')}")
 
 
+def cmd_monitor(args):
+    """Khởi chạy tiến trình Giám sát An ninh Tự hành (Autonomous SOAR Daemon)."""
+    daemon = SOCMonitorDaemon(
+        poll_interval=args.interval,
+        auto_block=False if args.no_auto_block else None,
+        lines_to_check=args.lines,
+        cooldown_minutes=args.cooldown
+    )
+    daemon.start()
+
+
+def cmd_test_email(args):
+    """Kiểm tra kết nối và gửi thử nghiệm Email cảnh báo qua Gmail SMTP."""
+    cfg = get_email_config()
+    target = args.to or cfg.get("recipient_email") or cfg.get("sender_email")
+    print(f"[*] Đang chuẩn bị gửi email thử nghiệm...")
+    print(f"    SMTP Server: {cfg.get('smtp_server')}:{cfg.get('smtp_port')}")
+    print(f"    Người gửi:   {cfg.get('sender_email') or '(Chưa cấu hình trong .env)'}")
+    print(f"    Người nhận:  {target or '(Chưa cấu hình)'}")
+    print(f"    Trạng thái:  {'BẬT (Live SMTP)' if cfg.get('enabled') else 'TẮT (Chỉ lưu file preview HTML)'}\n")
+
+    res = send_test_email(recipient=target)
+    if res["status"] == "sent":
+        print(f"✅ Gửi email thử nghiệm thành công tới: {res.get('recipient')}!")
+        print(f"   Bản tin lưu trữ: {res.get('preview_path')}")
+    elif res["status"] == "skipped":
+        print(f"ℹ️ Chưa gửi email thật qua SMTP: {res.get('reason')}")
+        print(f"   Đã lưu bản tin mẫu giao diện HTML tại: {res.get('preview_path')}")
+        print("   👉 Bạn có thể mở file HTML trên bằng trình duyệt để xem trước giao diện báo cáo.")
+    else:
+        print(f"🛑 Gặp lỗi khi gửi email qua SMTP: {res.get('error')}")
+        print(f"   Bản tin dự phòng được lưu tại: {res.get('preview_path')}")
+
+
 def cmd_ui(args):
     """Khởi chạy Giao diện Web Dashboard (Streamlit)."""
     print("[*] Đang khởi chạy Giao diện Web Dashboard trên Streamlit...")
@@ -276,6 +332,8 @@ def cmd_test(args):
     print("[*] Đang thực thi toàn bộ bài kiểm thử tự động trong tests/...\n")
     test_files = [
         "tests/test_policy_engine.py",
+        "tests/test_notifier.py",
+        "tests/test_monitor_daemon.py",
         "tests/test_llm.py",
         "tests/test_detection_rules.py",
         "tests/test_tools.py",
@@ -293,6 +351,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", help="Lệnh chức năng")
+
+    # Lệnh: monitor (Mới: Autonomous SOAR Daemon)
+    p_mon = subparsers.add_parser("monitor", help="Khởi động tiến trình Giám sát Tự hành liên tục (SOAR Daemon)")
+    p_mon.add_argument("-i", "--interval", type=int, default=None, help="Chu kỳ thăm dò tính theo giây (mặc định: đọc từ .env hoặc 20s)")
+    p_mon.add_argument("-l", "--lines", type=int, default=300, help="Số dòng log auth.log kiểm tra mỗi chu kỳ (mặc định: 300)")
+    p_mon.add_argument("-c", "--cooldown", type=int, default=15, help="Thời gian làm nguội chống bão log tính theo phút (mặc định: 15)")
+    p_mon.add_argument("--no-auto-block", action="store_true", help="Tắt tự động chặn IP (chuyển sang chế độ Semi-Autonomous chờ duyệt)")
+    p_mon.set_defaults(func=cmd_monitor)
+
+    # Lệnh: test-email (Mới: Kiểm tra kết nối SMTP Gmail)
+    p_email = subparsers.add_parser("test-email", help="Gửi email thử nghiệm kiểm tra kết nối Gmail SMTP")
+    p_email.add_argument("--to", type=str, default=None, help="Địa chỉ email nhận thử nghiệm (mặc định: đọc từ .env)")
+    p_email.set_defaults(func=cmd_test_email)
 
     # Lệnh: scan
     p_scan = subparsers.add_parser("scan", help="Quét và hiển thị toàn bộ cảnh báo an ninh")

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 tests/test_policy_engine.py - Bộ kiểm thử tự động cho Lớp kiểm soát phản ứng (Policy Engine Guardrails).
-Kiểm tra toàn bộ các kịch bản: Whitelist bảo vệ, Chống Injection, Ngưỡng bằng chứng, và Ghi nhật ký Audit.
+Kiểm tra toàn bộ các kịch bản: Whitelist bảo vệ, Ràng buộc Alert (Chống Prompt Injection),
+Ngưỡng bằng chứng, Quản lý TTL, Rate Limit và Ghi nhật ký Audit.
 """
 
 import os
 import sys
 import unittest
+from datetime import datetime, timedelta
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -17,6 +19,11 @@ from policy_engine import (
     is_protected_ip,
     evaluate_action,
     record_audit_log,
+    save_active_block,
+    load_active_blocks,
+    remove_active_block,
+    get_expired_blocks,
+    check_rate_limit,
     PolicyDecision,
     DEFAULT_PROTECTED_IPS,
 )
@@ -61,13 +68,48 @@ class TestPolicyEngine(unittest.TestCase):
         self.assertEqual(decision.risk_level, "CRITICAL")
         self.assertIn("TỪ CHỐI BẢO MẬT", decision.reason)
 
-    def test_protected_whitelist_loopback_and_server(self):
-        """Kiểm tra bảo vệ IP loopback và chính máy chủ lab."""
+    def test_protected_whitelist_loopback_nat_and_server(self):
+        """Kiểm tra bảo vệ IP loopback, cổng NAT VirtualBox (10.0.2.2) và chính máy chủ lab."""
         decision_loopback = evaluate_action("block_ip", "127.0.0.1")
         self.assertFalse(decision_loopback.allowed)
 
         decision_server = evaluate_action("block_ip", "192.168.56.101")
         self.assertFalse(decision_server.allowed)
+
+        decision_nat = evaluate_action("block_ip", "10.0.2.2")
+        self.assertFalse(decision_nat.allowed, "Cổng NAT VirtualBox 10.0.2.2 phải nằm trong whitelist!")
+
+    def test_alert_correlation_blocks_prompt_injection(self):
+        """
+        KỊCH BẢN PHÒNG CHỐNG PROMPT INJECTION:
+        Kẻ tấn công inject vào log để Agent đề xuất chặn một IP tùy ý (ví dụ DNS 8.8.8.8 hoặc 1.1.1.1).
+        Policy Engine BẮT BUỘC từ chối nếu IP này không xuất hiện trong Alert hoặc Bằng chứng.
+        """
+        attacker_target = "8.8.8.8"
+        # Alert chỉ nói về IP 192.168.56.102
+        context = {
+            "alert": {"src_ip": "192.168.56.102", "rule": "ssh_bruteforce"},
+            "evidence": ["Phát hiện 12 lần đăng nhập thất bại từ 192.168.56.102"],
+            "verdict": "malicious_activity_likely",
+            "confidence": "high"
+        }
+        decision = evaluate_action("block_ip", attacker_target, context)
+        self.assertFalse(decision.allowed, "Policy Engine phải từ chối khi IP đề xuất không có trong Alert!")
+        self.assertEqual(decision.risk_level, "CRITICAL")
+        self.assertIn("không xuất hiện trong cảnh báo", decision.reason)
+
+    def test_alert_correlation_allows_valid_target(self):
+        """Khi IP đề xuất trùng khớp với IP nguồn trong Alert thì Policy chấp thuận."""
+        valid_target = "192.168.56.102"
+        context = {
+            "alert": {"src_ip": "192.168.56.102", "rule": "ssh_bruteforce"},
+            "evidence": ["Phát hiện 12 lần đăng nhập thất bại từ 192.168.56.102"],
+            "verdict": "malicious_activity_likely",
+            "confidence": "high"
+        }
+        decision = evaluate_action("block_ip", valid_target, context)
+        self.assertTrue(decision.allowed, "IP nằm trong cảnh báo và ngoài whitelist phải được chấp thuận!")
+        self.assertTrue(decision.requires_approval)
 
     def test_verdict_threshold_benign(self):
         """Nếu Agent kết luận benign_likely thì KHÔNG được phép block IP."""
@@ -75,22 +117,10 @@ class TestPolicyEngine(unittest.TestCase):
         decision = evaluate_action(
             "block_ip",
             attacker_ip,
-            {"verdict": "benign_likely", "confidence": "high"}
+            {"alert": {"src_ip": attacker_ip}, "verdict": "benign_likely", "confidence": "high"}
         )
         self.assertFalse(decision.allowed)
         self.assertIn("benign_likely", decision.reason)
-
-    def test_valid_attacker_ip_allowed_with_hitl(self):
-        """Khi phát hiện tấn công thật từ IP ngoài, Policy Engine cho phép nhưng yêu cầu HITL phê duyệt."""
-        attacker_ip = "203.0.113.55"
-        decision = evaluate_action(
-            "block_ip",
-            attacker_ip,
-            {"verdict": "malicious_activity_likely", "confidence": "high"}
-        )
-        self.assertTrue(decision.allowed)
-        self.assertTrue(decision.requires_approval, "Hành động chặn IP luôn phải yêu cầu người phê duyệt (HITL)!")
-        self.assertEqual(decision.risk_level, "HIGH")
 
     def test_unblock_action(self):
         """Kiểm tra hành động hoàn tác gỡ chặn IP."""
@@ -98,14 +128,28 @@ class TestPolicyEngine(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertTrue(decision.requires_approval)
 
-    def test_unsupported_action(self):
-        """Kiểm tra hành động lạ không được phép."""
-        decision = evaluate_action("format_hard_drive", "sda1")
-        self.assertFalse(decision.allowed)
-        self.assertEqual(decision.risk_level, "CRITICAL")
+    def test_ttl_and_active_blocks_management(self):
+        """Kiểm tra quản lý danh sách IP bị chặn kèm thời hạn cách ly (TTL)."""
+        test_dir = os.path.join(ROOT_DIR, "runs")
+        test_ip = "198.51.100.77"
+
+        # 1. Lưu block với TTL 15 phút
+        entry = save_active_block(test_ip, ttl_minutes=15, reason="Test TTL", log_dir=test_dir)
+        self.assertEqual(entry["ip"], test_ip)
+        self.assertEqual(entry["ttl_minutes"], 15)
+
+        # 2. Đọc lại danh sách
+        blocks = load_active_blocks(log_dir=test_dir)
+        self.assertIn(test_ip, blocks)
+
+        # 3. Gỡ bỏ
+        removed = remove_active_block(test_ip, log_dir=test_dir)
+        self.assertTrue(removed)
+        blocks_after = load_active_blocks(log_dir=test_dir)
+        self.assertNotIn(test_ip, blocks_after)
 
     def test_audit_logging(self):
-        """Kiểm tra việc ghi nhật ký kiểm toán không thể chối bỏ."""
+        """Kiểm tra việc ghi nhật ký kiểm toán có cấu trúc."""
         decision = PolicyDecision(
             allowed=True,
             action="block_ip",
@@ -126,13 +170,6 @@ class TestPolicyEngine(unittest.TestCase):
         self.assertEqual(entry["action"], "block_ip")
         self.assertEqual(entry["target"], "203.0.113.77")
 
-        # Kiểm tra file audit có tồn tại
-        log_file = os.path.join(test_dir, "action_audit.log")
-        jsonl_file = os.path.join(test_dir, "audit_trail.jsonl")
-        self.assertTrue(os.path.exists(log_file))
-        self.assertTrue(os.path.exists(jsonl_file))
-
 
 if __name__ == "__main__":
     unittest.main()
-

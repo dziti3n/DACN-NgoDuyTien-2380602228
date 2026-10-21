@@ -8,25 +8,29 @@ Chạy bằng mã nguồn Python xác định (Deterministic Rule-Based), hoàn 
 import ipaddress
 import json
 import os
+import re
 from dataclasses import dataclass, asdict
-from datetime import datetime
-from typing import Optional, List, Tuple
+from datetime import datetime, timedelta
+from typing import Optional, List, Tuple, Dict, Any
 
 
 # Danh sách các IP và Subnet luôn luôn được bảo vệ (Whitelist - Cấm chặn trong mọi trường hợp)
 # Tránh trường hợp Agent bị lừa hoặc nhầm lẫn tự chặn máy Host Windows (192.168.56.1),
-# loopback, hoặc chính IP của máy chủ lab.
+# loopback, cổng NAT VirtualBox (10.0.2.2), hoặc chính IP của máy chủ lab.
 DEFAULT_PROTECTED_IPS = {
     "127.0.0.1",
     "::1",
     "192.168.56.1",    # Host Windows (VirtualBox Host-Only Adapter)
     "192.168.56.101",  # Target Lab Server Linux
+    "10.0.2.2",        # VirtualBox NAT Gateway
 }
 
 DEFAULT_PROTECTED_NETWORKS = [
-    # Có thể thêm dải mạng nội bộ bảo vệ nếu cần:
-    # ipaddress.ip_network("127.0.0.0/8"),
+    # Có thể bổ sung dải mạng quản trị nếu cần
 ]
+
+DEFAULT_BLOCK_TTL_MINUTES = 15  # Thời gian cách ly mặc định: 15 phút
+MAX_BLOCKS_PER_HOUR = 5        # Giới hạn tối đa 5 lần chặn trong 1 giờ (Anti-DoS)
 
 
 def load_protected_ips() -> set:
@@ -75,7 +79,7 @@ def is_protected_ip(ip_str: str) -> Tuple[bool, str]:
 
     protected_set = load_protected_ips()
     if cleaned in protected_set:
-        return True, f"IP {cleaned} nằm trong danh sách ĐẶC BIỆT ĐƯỢC BẢO VỆ (Protected Whitelist - Host/Lab Server)."
+        return True, f"IP {cleaned} nằm trong danh sách ĐẶC BIỆT ĐƯỢC BẢO VỆ (Protected Whitelist: Host/Lab/Gateway)."
 
     ip_obj = ipaddress.ip_address(cleaned)
     if ip_obj.is_loopback:
@@ -88,6 +92,42 @@ def is_protected_ip(ip_str: str) -> Tuple[bool, str]:
     return False, "IP không nằm trong danh sách bảo vệ."
 
 
+def check_rate_limit(max_per_hour: int = MAX_BLOCKS_PER_HOUR, log_dir: str = "runs") -> Tuple[bool, str]:
+    """
+    Kiểm tra tần suất thực thi chặn IP trong 1 giờ qua.
+    Chống lại kịch bản kẻ tấn công kích hoạt hàng trăm cảnh báo giả để làm tràn bảng luật UFW.
+    """
+    audit_jsonl = os.path.join(log_dir, "audit_trail.jsonl")
+    if not os.path.exists(audit_jsonl):
+        return True, "Chưa có sự kiện nào."
+
+    one_hour_ago = datetime.now() - timedelta(hours=1)
+    recent_blocks = 0
+
+    try:
+        with open(audit_jsonl, "r", encoding="utf-8") as f:
+            for line in f:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    entry = json.loads(line_str)
+                    if entry.get("action") == "block_ip" and entry.get("execution", {}).get("status") == "ok":
+                        ts_str = entry.get("timestamp")
+                        if ts_str:
+                            ts = datetime.fromisoformat(ts_str)
+                            if ts >= one_hour_ago:
+                                recent_blocks += 1
+                except Exception:
+                    pass
+    except Exception as ex:
+        return True, f"Bỏ qua kiểm tra rate limit do lỗi đọc file: {ex}"
+
+    if recent_blocks >= max_per_hour:
+        return False, f"Đã thực thi {recent_blocks} lần chặn trong 1 giờ qua (Giới hạn: tối đa {max_per_hour} lần/giờ)."
+    return True, f"Tần suất an toàn ({recent_blocks}/{max_per_hour} lần trong giờ qua)."
+
+
 def evaluate_action(action: str, target: str, context: Optional[dict] = None) -> PolicyDecision:
     """
     Thẩm định một hành động phản ứng dự kiến (Block IP, Unblock IP, ...).
@@ -95,14 +135,13 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
     Tham số:
     - action: Tên hành động ("block_ip", "unblock_ip")
     - target: Đối tượng tác động (ví dụ: IP cần chặn)
-    - context: Ngữ cảnh điều tra (verdict, severity, confidence, evidence)
-    
-    Trả về: PolicyDecision
+    - context: Ngữ cảnh điều tra (alert, verdict, severity, confidence, evidence)
     """
     context = context or {}
     
     # 1. Thẩm định hành động BLOCK IP
     if action == "block_ip":
+        # a. Kiểm tra tính hợp lệ cú pháp IP (Chống Command Injection)
         valid, msg = validate_ip(target)
         if not valid:
             return PolicyDecision(
@@ -114,7 +153,7 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
                 risk_level="HIGH"
             )
 
-        # Kiểm tra danh sách bảo vệ (QUAN TRỌNG NHẤT: Chống tự khóa mình)
+        # b. Kiểm tra danh sách bảo vệ (QUAN TRỌNG NHẤT: Chống tự khóa mình)
         protected, prot_msg = is_protected_ip(target)
         if protected:
             return PolicyDecision(
@@ -126,11 +165,50 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
                 risk_level="CRITICAL"
             )
 
-        # Kiểm tra ngưỡng bằng chứng (Evidence Threshold)
+        # c. Ràng buộc IP với Cảnh báo & Bằng chứng (Chống Prompt Injection lừa chặn IP tùy ý)
+        alert = context.get("alert") or {}
+        evidence = context.get("evidence") or []
+        alert_src = alert.get("src_ip")
+
+        # Thu thập các IP thực sự liên quan trong phiên điều tra
+        related_ips = set()
+        if alert_src:
+            related_ips.add(alert_src.strip())
+        for ev in evidence:
+            found_ips = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", str(ev))
+            for f_ip in found_ips:
+                related_ips.add(f_ip.strip())
+
+        # Nếu có thông tin cảnh báo/bằng chứng, IP mục tiêu BẮT BUỘC phải nằm trong đó
+        if related_ips and (target.strip() not in related_ips):
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=target,
+                reason=(
+                    f"TỪ CHỐI BẢO MẬT: IP '{target}' không xuất hiện trong cảnh báo gốc ({alert_src or 'N/A'}) "
+                    f"hay bất kỳ chứng cứ nào đã xác minh. Hệ thống ngăn chặn nguy cơ Prompt Injection dẫn dắt chặn IP tùy ý."
+                ),
+                requires_approval=True,
+                risk_level="CRITICAL"
+            )
+
+        # d. Kiểm tra Rate Limiting (Giới hạn tần suất)
+        rate_ok, rate_msg = check_rate_limit(max_per_hour=MAX_BLOCKS_PER_HOUR)
+        if not rate_ok:
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=target,
+                reason=f"TỪ CHỐI BẢO MẬT: {rate_msg} Vui lòng đợi hoặc gỡ chặn các IP cũ trước khi thực hiện thêm.",
+                requires_approval=True,
+                risk_level="HIGH"
+            )
+
+        # e. Kiểm tra ngưỡng bằng chứng (Evidence Threshold)
         verdict = context.get("verdict")
         confidence = context.get("confidence", "low")
         
-        # Nếu đã có kết luận điều tra:
         if verdict == "benign_likely":
             return PolicyDecision(
                 allowed=False,
@@ -156,7 +234,7 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
             allowed=True,
             action=action,
             target=target,
-            reason="Hợp lệ: IP kiểm tra đạt chuẩn an toàn, không vi phạm Whitelist. Yêu cầu phê duyệt từ chuyên viên SOC (HITL).",
+            reason=f"Hợp lệ: IP kiểm tra đạt chuẩn an toàn, nằm trong cảnh báo, không vi phạm Whitelist. Áp dụng thời hạn cách ly {DEFAULT_BLOCK_TTL_MINUTES} phút. Yêu cầu phê duyệt từ chuyên viên SOC (HITL).",
             requires_approval=True,
             risk_level="HIGH"
         )
@@ -193,17 +271,96 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
     )
 
 
+# ==============================================================
+# QUẢN LÝ THỜI HẠN CÁCH LY IP (TTL MANAGEMENT)
+# ==============================================================
+
+def get_active_blocks_file(log_dir: str = "runs") -> str:
+    os.makedirs(log_dir, exist_ok=True)
+    return os.path.join(log_dir, "active_blocks.json")
+
+
+def load_active_blocks(log_dir: str = "runs") -> Dict[str, Any]:
+    path = get_active_blocks_file(log_dir)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_active_block(
+    ip: str,
+    ttl_minutes: int = DEFAULT_BLOCK_TTL_MINUTES,
+    reason: str = "",
+    operator: str = "SOC Analyst",
+    log_dir: str = "runs"
+) -> Dict[str, Any]:
+    """Lưu trữ thông tin chặn IP kèm thời gian hết hạn (TTL)."""
+    blocks = load_active_blocks(log_dir)
+    now = datetime.now()
+    expires_at = now + timedelta(minutes=ttl_minutes)
+
+    entry = {
+        "ip": ip,
+        "blocked_at": now.isoformat(timespec="seconds"),
+        "ttl_minutes": ttl_minutes,
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+        "reason": reason,
+        "operator": operator
+    }
+    blocks[ip] = entry
+
+    path = get_active_blocks_file(log_dir)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(blocks, f, ensure_ascii=False, indent=2)
+
+    return entry
+
+
+def remove_active_block(ip: str, log_dir: str = "runs") -> bool:
+    """Xóa IP khỏi danh sách theo dõi khi đã gỡ chặn."""
+    blocks = load_active_blocks(log_dir)
+    if ip in blocks:
+        del blocks[ip]
+        path = get_active_blocks_file(log_dir)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(blocks, f, ensure_ascii=False, indent=2)
+        return True
+    return False
+
+
+def get_expired_blocks(log_dir: str = "runs") -> List[str]:
+    """Tìm danh sách các IP đã hết hạn thời gian cách ly để tiến hành tự động gỡ bỏ."""
+    blocks = load_active_blocks(log_dir)
+    now = datetime.now()
+    expired = []
+
+    for ip, info in blocks.items():
+        exp_str = info.get("expires_at")
+        if exp_str:
+            try:
+                exp_dt = datetime.fromisoformat(exp_str)
+                if now >= exp_dt:
+                    expired.append(ip)
+            except Exception:
+                pass
+    return expired
+
+
 def record_audit_log(
     action: str,
     target: str,
     operator: str,
-    policy_decision: PolicyDecision,
-    execution_result: dict,
+    policy_decision: Optional[PolicyDecision] = None,
+    execution_result: Optional[dict] = None,
     verification_result: Optional[dict] = None,
     log_dir: str = "runs"
 ):
     """
-    Ghi nhật ký kiểm toán không thể chối bỏ (Audit Trail / Non-repudiation) vào cả
+    Ghi nhật ký kiểm toán có cấu trúc (Structured Audit Trail) vào cả
     file log dễ đọc (action_audit.log) và JSON Lines (audit_trail.jsonl).
     """
     os.makedirs(log_dir, exist_ok=True)
@@ -214,8 +371,8 @@ def record_audit_log(
         "action": action,
         "target": target,
         "operator": operator,
-        "policy": policy_decision.to_dict(),
-        "execution": execution_result,
+        "policy": policy_decision.to_dict() if policy_decision else {"allowed": True, "reason": "N/A or System Automated"},
+        "execution": execution_result or {},
         "verification": verification_result or {},
     }
 
@@ -227,14 +384,15 @@ def record_audit_log(
     # 2. Ghi file Text Log truyền thống
     text_path = os.path.join(log_dir, "action_audit.log")
     with open(text_path, "a", encoding="utf-8") as f:
-        status_str = "SUCCESS" if execution_result.get("status") == "ok" else "FAILED"
+        status_str = "SUCCESS" if (execution_result and execution_result.get("status") in ("ok", "success")) else "FAILED"
         verified_str = "VERIFIED" if (verification_result and verification_result.get("verified")) else "UNVERIFIED"
+        policy_str = "ALLOWED" if (not policy_decision or policy_decision.allowed) else "DENIED"
+        reason_str = policy_decision.reason if policy_decision else "Automated System Action"
         line = (
             f"[{now_str}] OPERATOR='{operator}' ACTION='{action}' TARGET='{target}' "
-            f"POLICY='{'ALLOWED' if policy_decision.allowed else 'DENIED'}' "
-            f"RESULT='{status_str}' VERIFY='{verified_str}' REASON='{policy_decision.reason}'\n"
+            f"POLICY='{policy_str}' "
+            f"RESULT='{status_str}' VERIFY='{verified_str}' REASON='{reason_str}'\n"
         )
         f.write(line)
 
     return audit_entry
-

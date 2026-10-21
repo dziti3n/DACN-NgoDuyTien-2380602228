@@ -33,7 +33,12 @@ from policy_engine import (
     is_protected_ip,
     validate_ip,
     load_protected_ips,
+    save_active_block,
+    remove_active_block,
+    load_active_blocks,
+    DEFAULT_BLOCK_TTL_MINUTES,
 )
+from notifier import send_test_email, get_email_config
 from llm_client import get_llm_client
 
 
@@ -78,8 +83,8 @@ st.sidebar.markdown(f"**SSH User:** `{USER}`")
 # Trạng thái mô hình LLM Cục bộ
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🧠 Mô hình AI Cục bộ (Ollama)")
-st.sidebar.success("⚡ **Chế độ: 100% Cục bộ (Local Air-Gapped)**")
-st.sidebar.info(f"Model: `{os.getenv('OLLAMA_MODEL', 'qwen3:4b')}`\n\nEndpoint: `127.0.0.1:11434`\n\nSeed: `42` (Deterministic)")
+st.sidebar.success("⚡ **Chế độ: 100% Cục bộ (Local LLM)**")
+st.sidebar.info(f"Model: `{os.getenv('OLLAMA_MODEL', 'qwen3:4b')}`\n\nEndpoint: `127.0.0.1:11434`\n\nSeed: `42` (Tất định)")
 
 # Whitelist IP bảo vệ
 st.sidebar.markdown("---")
@@ -237,7 +242,7 @@ with tab1:
                     # ==========================================================
                     st.markdown("---")
                     st.markdown("### 🛡️ Đề xuất xử lý & Thẩm định Policy Engine (HITL)")
-                    st.caption("Mọi hành động phản ứng trên hệ thống mạng đều phải được Policy Engine thẩm định an toàn và được chuyên viên SOC phê duyệt.")
+                    st.caption(f"Mọi hành động can thiệp mạng đều phải vượt qua Policy Engine (Ràng buộc Alert, Whitelist, Rate Limit, TTL {DEFAULT_BLOCK_TTL_MINUTES} phút).")
 
                     recs = conc.get("recommended_actions", [])
                     if not recs:
@@ -247,18 +252,19 @@ with tab1:
                         with st.container(border=True):
                             st.markdown(f"**Hành động đề xuất #{act_idx + 1}:** {act}")
                             
-                            # Tìm IP mục tiêu từ văn bản đề xuất hoặc từ alert
                             target_ip = extract_ip_from_text(act) or current_alert.get("src_ip")
                             is_block_proposal = any(k in act.lower() for k in ["chặn", "block", "ufw", "cấm"])
                             
                             if is_block_proposal and target_ip:
                                 st.markdown(f"🎯 **Đối tượng IP mục tiêu:** `{target_ip}`")
                                 
-                                # Thẩm định an toàn qua Policy Engine
+                                # Thẩm định an toàn qua Policy Engine với ngữ cảnh Alert & Evidence đầy đủ
                                 decision = evaluate_action(
                                     action="block_ip",
                                     target=target_ip,
                                     context={
+                                        "alert": current_alert,
+                                        "evidence": conc.get("evidence", []),
                                         "verdict": conc.get("verdict"),
                                         "confidence": conc.get("confidence"),
                                         "severity": conc.get("severity"),
@@ -266,7 +272,6 @@ with tab1:
                                 )
                                 
                                 if not decision.allowed:
-                                    # Trường hợp Policy Engine ngăn chặn (ví dụ: Whitelist IP máy host)
                                     st.error(f"🛑 **POLICY ENGINE TỪ CHỐI THỰC THI:**\n\n{decision.reason}")
                                     st.button(
                                         "❌ Đã bị khóa bởi Policy Engine (Cấm Chặn)",
@@ -274,13 +279,12 @@ with tab1:
                                         disabled=True
                                     )
                                 else:
-                                    # Trường hợp Policy Engine chấp thuận nhưng yêu cầu HITL
                                     st.warning(f"⚠️ **POLICY ENGINE:** {decision.reason}")
                                     
                                     col_btn1, col_btn2 = st.columns([1, 1])
                                     with col_btn1:
-                                        if st.button(f"✅ Phê duyệt & Chặn IP `{target_ip}` (HITL)", key=f"hitl_exec_{act_idx}"):
-                                            with st.spinner(f"Đang thực thi lệnh chặn UFW và xác minh trên {HOST}..."):
+                                        if st.button(f"✅ Phê duyệt & Chặn IP `{target_ip}` ({DEFAULT_BLOCK_TTL_MINUTES}p)", key=f"hitl_exec_{act_idx}"):
+                                            with st.spinner(f"Đang gọi Wrapper Script chặn UFW và xác minh trên {HOST}..."):
                                                 exec_res = block_ip(target_ip)
                                                 verify_res = verify_response(target_ip, expected_state="blocked")
                                                 record_audit_log(
@@ -292,10 +296,13 @@ with tab1:
                                                     verification_result=verify_res
                                                 )
                                                 if exec_res.get("status") == "ok":
+                                                    save_active_block(target_ip, ttl_minutes=DEFAULT_BLOCK_TTL_MINUTES, reason=decision.reason)
                                                     st.session_state[f"blocked_status_{target_ip}"] = True
                                                     st.success(f"🎉 {verify_res.get('data', {}).get('message', 'Đã chặn IP thành công!')}")
+                                                    if verify_res.get("data", {}).get("ufw_warning"):
+                                                        st.warning(verify_res["data"]["ufw_warning"])
                                                 else:
-                                                    st.error(f"Lỗi thực thi UFW: {exec_res.get('error')}")
+                                                    st.error(f"Lỗi thực thi: {exec_res.get('error')}")
 
                                     with col_btn2:
                                         if st.session_state.get(f"blocked_status_{target_ip}", False):
@@ -303,10 +310,10 @@ with tab1:
                                                 with st.spinner(f"Đang gỡ bỏ quy tắc chặn trên {HOST}..."):
                                                     unblock_res = unblock_ip(target_ip)
                                                     v_unblock = verify_response(target_ip, expected_state="unblocked")
+                                                    remove_active_block(target_ip)
                                                     st.session_state[f"blocked_status_{target_ip}"] = False
                                                     st.info(f"Đã gỡ chặn IP {target_ip}!")
                             else:
-                                # Hành động đề xuất thông thường (không phải block IP)
                                 col_a1, col_a2 = st.columns([4, 1])
                                 with col_a1:
                                     st.info("Hành động xử lý mang tính chất khuyến nghị quy trình / rà soát thủ công.")
@@ -393,7 +400,7 @@ with tab3:
 # ==============================================================================
 with tab4:
     st.subheader("🛡️ Lớp Phản ứng có kiểm soát & Tường lửa UFW (Active Defense)")
-    st.caption("Quản lý trạng thái tường lửa máy chủ lab, kiểm thử Policy Engine và tra cứu Nhật ký Kiểm toán không thể chối bỏ.")
+    st.caption("Quản lý trạng thái tường lửa máy chủ lab, theo dõi danh sách cách ly IP có thời hạn (TTL) và tra cứu Audit Trail.")
 
     col_fw_left, col_fw_right = st.columns([1.2, 1])
 
@@ -425,6 +432,7 @@ with tab4:
                             if st.button(f"Gỡ chặn", key=f"unblock_btn_{r_num}"):
                                 clean_unblock_ip = r_from.split()[0]
                                 un_res = unblock_ip(clean_unblock_ip)
+                                remove_active_block(clean_unblock_ip)
                                 st.success(f"Đã gửi lệnh gỡ rule #{r_num}!")
                                 st.rerun()
             else:
@@ -433,7 +441,25 @@ with tab4:
                     st.text(fw_data.get("raw_output", ""))
         else:
             st.warning(f"Không thể truy vấn UFW: {fw_res.get('error')}")
-            st.info("💡 Lưu ý: Trên máy chủ lab Linux, cần cấp quyền sudo không mật khẩu cho UFW:\n```bash\necho 'agent_soc ALL=(ALL) NOPASSWD: /usr/sbin/ufw' | sudo tee /etc/sudoers.d/soc_agent_ufw\n```")
+            st.info("💡 Lưu ý: Trên máy chủ lab Linux, cần chạy script thiết lập wrapper bảo vệ:\n```bash\nsudo bash scripts/setup_lab_guardrails.sh\n```")
+
+        # Hiển thị danh sách các IP đang bị cách ly có thời hạn (Active Blocks & TTL)
+        st.markdown("---")
+        st.markdown("#### ⏳ Danh sách IP Đang Cách Ly Có Thời Hạn (Active TTL Blocks)")
+        active_blocks = load_active_blocks()
+        if active_blocks:
+            for b_ip, b_info in list(active_blocks.items()):
+                c_b1, c_b2, c_b3 = st.columns([2, 3, 1.5])
+                c_b1.markdown(f"🎯 **IP:** `{b_ip}`")
+                c_b2.markdown(f"Hết hạn lúc: `{b_info.get('expires_at')}` ({b_info.get('ttl_minutes')}p)")
+                with c_b3:
+                    if st.button("Gỡ chặn ngay", key=f"active_unblock_{b_ip}"):
+                        unblock_ip(b_ip)
+                        remove_active_block(b_ip)
+                        st.success(f"Đã gỡ chặn IP {b_ip}!")
+                        st.rerun()
+        else:
+            st.caption("Hiện tại không có IP nào trong danh sách cách ly tạm thời.")
 
     with col_fw_right:
         st.markdown("#### 🧪 Thử nghiệm Policy Engine Guardrails")
@@ -446,11 +472,65 @@ with tab4:
         )
         
         if st.button("Kiểm tra với Policy Engine"):
-            dec = evaluate_action("block_ip", test_ip_input, context={"verdict": test_verdict, "confidence": "high"})
+            dec = evaluate_action("block_ip", test_ip_input, context={
+                "alert": {"src_ip": test_ip_input},
+                "verdict": test_verdict,
+                "confidence": "high"
+            })
             if dec.allowed:
                 st.success(f"✅ **CHẤP THUẬN (Allowed):** {dec.reason}\n- Yêu cầu HITL: `{dec.requires_approval}`\n- Mức độ rủi ro: `{dec.risk_level}`")
             else:
                 st.error(f"🛑 **TỪ CHỐI (Denied):** {dec.reason}\n- Mức độ rủi ro: `{dec.risk_level}`")
+
+        # ------------------------------------------------------------------
+        # TRẠNG THÁI TIẾN TRÌNH GIÁM SÁT TỰ HÀNH (SOAR DAEMON)
+        # ------------------------------------------------------------------
+        st.markdown("---")
+        st.markdown("#### 🤖 Tiến Trình Giám Sát Tự Hành (SOAR Daemon)")
+        state_file = os.path.join("runs", "monitor_state.json")
+        daemon_info = {}
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, "r", encoding="utf-8") as sf:
+                    daemon_info = json.load(sf)
+            except Exception:
+                pass
+
+        is_running = daemon_info.get("is_running", False)
+        if is_running:
+            st.success(f"🟢 **Trạng thái:** ĐANG HOẠT ĐỘNG (PID: {daemon_info.get('pid')})")
+        else:
+            st.info("⚪ **Trạng thái:** Đang dừng hoặc chưa khởi chạy qua CLI.")
+
+        st.markdown(f"""
+        - **Chu kỳ thăm dò:** `{daemon_info.get('poll_interval_sec', 20)}s`
+        - **Chế độ Auto-Block:** `{'BẬT (Tự hành)' if daemon_info.get('auto_block_enabled', True) else 'TẮT (Chờ duyệt)'}`
+        - **Cảnh báo đã xử lý:** `{daemon_info.get('total_alerts_handled', 0)}`
+        - **IP đã cô lập UFW:** `{daemon_info.get('total_blocks_executed', 0)}`
+        - **Email đã gửi:** `{daemon_info.get('total_emails_sent', 0)}`
+        """)
+        st.caption("💡 Khởi chạy daemon trên terminal bằng lệnh: `python cli.py monitor`")
+
+        # ------------------------------------------------------------------
+        # CẤU HÌNH & KIỂM TRA THÔNG BÁO EMAIL GMAIL
+        # ------------------------------------------------------------------
+        st.markdown("---")
+        st.markdown("#### 📧 Thông Báo Email Cảnh Báo (Gmail SMTP)")
+        email_cfg = get_email_config()
+        if email_cfg.get("enabled"):
+            st.success(f"🟢 Email Alert: **ĐANG BẬT** ({email_cfg.get('sender_email')})")
+        else:
+            st.warning("🟠 Email Alert: **ĐANG TẮT** (Sẽ lưu file HTML vào `runs/alerts/`)")
+
+        if st.button("📨 Gửi Email thử nghiệm (Test Email)"):
+            with st.spinner("Đang gửi bản tin kiểm tra..."):
+                test_res = send_test_email()
+                if test_res.get("status") == "sent":
+                    st.success(f"Đã gửi email thử nghiệm thành công tới `{test_res.get('recipient')}`!")
+                elif test_res.get("status") == "skipped":
+                    st.info(f"Bản tin HTML đã được tạo tại: `{test_res.get('preview_path')}`\n(Chưa gửi SMTP vì {test_res.get('reason')})")
+                else:
+                    st.error(f"Lỗi gửi SMTP: {test_res.get('error')}")
 
     st.markdown("---")
     st.markdown("#### 📜 Nhật ký Kiểm toán Phản ứng (Audit Trail Log)")
