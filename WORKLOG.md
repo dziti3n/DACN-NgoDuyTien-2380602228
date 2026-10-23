@@ -3,7 +3,7 @@
 > **Dự án:** AI SOC Investigation & Autonomous Defense Agent  
 > **Tác giả:** Ngô Duy Tiến  
 > **Chế độ vận hành:** 100% Cục bộ (Local Ollama LLM, không rò rỉ dữ liệu qua Cloud API)  
-> **Cập nhật ngày:** 23/10/2026
+> **Cập nhật ngày:** 24/10/2026
 
 ---
 
@@ -116,6 +116,26 @@ Tất cả các bài kiểm thử tự động đều đã được chạy và v
   - **Phong cách Stealth Cyber Ops (Electric Blue & Dark Violet):** Nền đen sâu `#060814`, viền phát sáng công nghệ Neon Cyan/Violet, giữ nguyên khối Cyber Terminal 3 chấm màu macOS yêu thích, font Monospace hacker sắc nét.
   - **Cột phải cuộn nội bộ êm ái:** Khung hiển thị AI ReAct, Policy Engine, Tường lửa UFW và Email được bọc trong container `max-height: calc(100vh - 170px); overflow-y: auto; scrollbar-width: thin;`, giữ cho giao diện luôn phẳng phiu và ổn định.
   - **Giữ nguyên tốc độ phản hồi siêu nhanh (~9.8s):** Đảm bảo bài test mô phỏng hoàn thành trọn vẹn chu trình (AI điều tra $\rightarrow$ Policy duyệt $\rightarrow$ UFW chặn $\rightarrow$ Gửi Gmail) trong dưới 10 giây.
+
+---
+
+### 7. Chi Tiết Nâng Cấp Phiên 13: Dọn Dẹp Repository & Khóa Cứng .gitignore (Giải Phóng 67 MB & 854 File Rác)
+- [x] **Giải quyết triệt để vấn đề 858 file bị commit ngoài ý muốn lên Git:**
+  - **Phân tích nguyên nhân:** Quá trình chạy kiểm thử đối kháng tự động với Chrome headless và subagent review đã vô tình để lại 854 file rác (~67.2 MB) và lọt vào commit `fdcdfd2`.
+  - **Hành động xử lý dọn dẹp:**
+    1. Xóa hoàn toàn thư mục cache trình duyệt `.chrome_temp_check/` (792 file - ~67 MB cache/binary của Chrome).
+    2. Xóa các file nhật ký trung gian `.agents/teamwork/` (49 file log subagent), bảo tồn nguyên vẹn thư mục kỹ năng `.agents/skills/`.
+    3. Xóa các file preview email tạm `runs/alerts/*.html` và 2 script nháp không còn dùng (`install_ui_skills.py`, `test_autonomous_flow.py`).
+    4. Chạy `git rm -r --cached` gỡ theo dõi toàn bộ 854 file rác khỏi Git.
+    5. Cập nhật `.gitignore` với các quy tắc khóa cứng (chặn vĩnh viễn `.chrome_temp_check/`, `.agents/teamwork/`, `runs/alerts/`, `*.png`).
+  - **Kiểm thử hồi quy an toàn:**
+    - Toàn bộ bộ test `python -m unittest discover tests` đạt **28/28 tests PASS 100%**.
+    - Giao diện `app.py` và toàn bộ logic AI SOC tiếp tục hoạt động trơn tru.
+  - **Lệnh bàn giao cho người dùng commit lên Git:**
+    ```powershell
+    git commit -m "clean: loại bỏ 854 file rác chrome_temp_check, teamwork logs và cập nhật .gitignore"
+    git push origin Tuan2
+    ```
 
 ---
 
