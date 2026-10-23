@@ -1,0 +1,4 @@
+2026/10/24-00:28:55.901 2354 Creating DB d:\soc-agent\.chrome_temp_check\Default\Storage\ext\nmmhkkegccagdldgiimedpiccmgmieda\def\Local Storage\leveldb since it was missing.
+2026/10/24-00:28:55.923 2354 Reusing MANIFEST d:\soc-agent\.chrome_temp_check\Default\Storage\ext\nmmhkkegccagdldgiimedpiccmgmieda\def\Local Storage\leveldb/MANIFEST-000001
+2026/10/24-00:28:55.924 2354 Recovering log #3
+2026/10/24-00:28:55.927 2354 Reusing old log d:\soc-agent\.chrome_temp_check\Default\Storage\ext\nmmhkkegccagdldgiimedpiccmgmieda\def\Local Storage\leveldb/000003.log 

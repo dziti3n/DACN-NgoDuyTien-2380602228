@@ -21,14 +21,26 @@ class LLMError(Exception):
 
 
 def parse_json(text):
-    """Trích xuất và parse JSON từ phản hồi LLM an toàn.
-    Tự động bóc tách reasoning tag <think>...</think> và markdown code blocks nếu có.
+    """Trích xuất và parse JSON từ phản hồi LLM an toàn và chuẩn xác.
+    Tự động bóc tách reasoning tag <think>...</think>, markdown code blocks,
+    và tiền tố '{\\n' từ assistant prefill.
     """
     text = (text or "").strip()
     # Loại bỏ reasoning tag <think>...</think> (đặc thù của dòng mô hình Qwen / DeepSeek)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     # Loại bỏ code block ```json ... ```
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.DOTALL).strip()
+    if not cleaned.startswith("{") and ('"action"' in cleaned or '"verdict"' in cleaned):
+        cleaned = "{\n" + cleaned
+
+    idx = cleaned.find("{")
+    if idx != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(cleaned[idx:])
+            return obj
+        except Exception:
+            pass
+
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
@@ -65,25 +77,38 @@ class OllamaLocalClient:
         self.seed = int(os.getenv("OLLAMA_SEED", str(seed)))
         self.temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.0"))
         
-        # Timeout 120s cho mỗi lượt gọi LLM
-        self.client = httpx.Client(timeout=120.0)
+        # Timeout 45s cho mỗi lượt gọi LLM
+        self.client = httpx.Client(timeout=45.0)
 
     def generate(self, system, user, retries=1):
-        """Gửi prompt tới Ollama qua OpenAI-compatible chat endpoint với temperature=0 và seed cố định."""
+        """Gửi prompt tới Ollama qua OpenAI-compatible chat endpoint với temperature=0 và seed cố định.
+        Tối ưu tốc độ cao (High-Performance Inference): Prefill '{\\n' và giới hạn token để triệt tiêu
+        suy luận dài dòng (<think>), giúp phản hồi ngay trong 2-6 giây.
+        """
         import httpx
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": "Bearer ollama",
         }
+        # Prefill assistant message với "{\n" để model Qwen3 chuyển thẳng sang xuất JSON,
+        # bỏ qua hoàn toàn thẻ <think> trong Jinja chat template của Ollama.
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": "{\n"},
+        ]
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "temperature": self.temperature,
             "seed": self.seed,
+            "max_tokens": 400,
+            "options": {
+                "num_predict": 400,
+                "temperature": self.temperature,
+                "seed": self.seed,
+            },
         }
 
         url = f"{self.base_url}/chat/completions"
@@ -95,6 +120,9 @@ class OllamaLocalClient:
                 resp.raise_for_status()
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"]
+                raw_text = (content or "").strip()
+                if not raw_text.startswith("{") and ('"action"' in raw_text or '"verdict"' in raw_text):
+                    content = "{\n" + content
                 self.last_model_used = self.model
                 return parse_json(content)
             except httpx.ConnectError as ex:

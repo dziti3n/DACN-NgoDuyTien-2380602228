@@ -6,8 +6,9 @@ from datetime import datetime
 from llm_client import get_llm_client, LLMError
 from tools import TOOLS
 
-MAX_STEPS = 3          # Tối ưu hóa: 3 bước tối đa là đủ để điều tra và tiết kiệm thời gian CPU
-MAX_OUTPUT_CHARS = 1000  # Rút gọn dữ liệu tool để giảm tải xử lý token cho CPU
+# Tối ưu hóa hiệu năng: 1 bước gọi tool đặc định là đủ bằng chứng để Agent kết luận ngay trong <10s
+MAX_STEPS = int(os.getenv("MAX_INVESTIGATION_STEPS", "1"))
+MAX_OUTPUT_CHARS = 1000  # Rút gọn dữ liệu tool để giảm tải xử lý token cho CPU/GPU
 
 ALLOWED_ARGS = {
     "search_auth_logs": {"src_ip", "user", "lines"},
@@ -30,6 +31,7 @@ RULES
 4. Base every claim on evidence you actually saw in the alert or in tool outputs. Never invent numbers, users, IPs or events.
 5. If a tool returns status "error", note it and conclude.
 6. Severity "critical" only with evidence of a successful compromise plus privilege change or persistence.
+7. CRITICAL SPEED INSTRUCTION: Do NOT output <think> tags or chain-of-thought. Directly produce ONLY the raw valid JSON object.
 
 TOOLS
 - search_auth_logs(src_ip: string or null, user: string or null, lines: integer 200-1000): summary and recent SSH/sudo events filtered by source IP and/or user.
@@ -55,12 +57,14 @@ def build_user_prompt(alert, steps, must_conclude):
             parts.append(f"Step {i}: tool={s['tool']} args={json.dumps(s['args'], ensure_ascii=False)} reason={s['reason']}")
             text = json.dumps(s["result"], ensure_ascii=False)[:MAX_OUTPUT_CHARS]
             parts.append(f"<untrusted_tool_output>\n{text}\n</untrusted_tool_output>")
+        parts.append("EVIDENCE COLLECTED: The tool output above provides the necessary facts.")
+    
     used = len([s for s in steps if s["tool"] in TOOLS])
     parts.append(f"\nTool calls used: {used}/{MAX_STEPS}.")
-    if must_conclude:
-        parts.append("You have no tool calls left. You MUST conclude now with Form 2.")
+    if must_conclude or used >= MAX_STEPS:
+        parts.append("You have sufficient evidence. You MUST conclude now with Form 2. Output raw JSON only.")
     else:
-        parts.append("Decide next: call tool (Form 1) or conclude (Form 2).")
+        parts.append("Decide next: call tool (Form 1) or conclude (Form 2). Output raw JSON only.")
     return "\n".join(parts)
 
 

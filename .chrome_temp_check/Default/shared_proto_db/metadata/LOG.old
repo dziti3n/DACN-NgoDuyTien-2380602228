@@ -1,0 +1,4 @@
+2026/10/24-00:28:53.122 66d8 Creating DB d:\soc-agent\.chrome_temp_check\Default\shared_proto_db\metadata since it was missing.
+2026/10/24-00:28:53.140 66d8 Reusing MANIFEST d:\soc-agent\.chrome_temp_check\Default\shared_proto_db\metadata/MANIFEST-000001
+2026/10/24-00:28:53.141 66d8 Recovering log #3
+2026/10/24-00:28:53.141 66d8 Reusing old log d:\soc-agent\.chrome_temp_check\Default\shared_proto_db\metadata/000003.log 

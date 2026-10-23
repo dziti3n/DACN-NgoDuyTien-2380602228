@@ -21,6 +21,7 @@ ALERTS_DIR = Path("runs/alerts")
 
 def get_email_config():
     """Đọc cấu hình email từ biến môi trường."""
+    load_dotenv()
     enabled_str = os.getenv("ALERT_EMAIL_ENABLED", "false").lower()
     return {
         "enabled": enabled_str in ("true", "1", "yes"),

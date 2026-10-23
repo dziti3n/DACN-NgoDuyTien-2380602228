@@ -1,6 +1,13 @@
 import os
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from notifier import build_alert_html, send_alert_email, get_email_config
 
 class TestNotifier(unittest.TestCase):
@@ -51,14 +58,20 @@ class TestNotifier(unittest.TestCase):
 
     def test_send_alert_email_disabled_saves_preview(self):
         # Khi chưa bật ALERT_EMAIL_ENABLED, hàm phải lưu preview HTML và trả về status 'skipped'
-        os.environ["ALERT_EMAIL_ENABLED"] = "false"
-        res = send_alert_email(
-            subject="Test Subject",
-            html_content="<h1>Test Alert</h1>",
-            save_preview=True
-        )
-        self.assertEqual(res["status"], "skipped")
-        self.assertTrue(Path(res["preview_path"]).exists())
+        with patch.dict(os.environ, {"ALERT_EMAIL_ENABLED": "false"}):
+            res = send_alert_email(
+                subject="Test Subject",
+                html_content="<h1>Test Alert</h1>",
+                save_preview=True
+            )
+            self.assertEqual(res["status"], "skipped")
+            preview_p = Path(res["preview_path"])
+            self.assertTrue(preview_p.exists())
+            # Dọn dẹp file preview sau khi kiểm tra để không làm ô nhiễm runs/alerts/
+            try:
+                preview_p.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     unittest.main()

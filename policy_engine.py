@@ -112,7 +112,7 @@ def check_rate_limit(max_per_hour: int = MAX_BLOCKS_PER_HOUR, log_dir: str = "ru
                     continue
                 try:
                     entry = json.loads(line_str)
-                    if entry.get("action") == "block_ip" and entry.get("execution", {}).get("status") == "ok":
+                    if entry.get("action") == "block_ip" and entry.get("execution", {}).get("status") in ("ok", "success"):
                         ts_str = entry.get("timestamp")
                         if ts_str:
                             ts = datetime.fromisoformat(ts_str)
@@ -128,7 +128,7 @@ def check_rate_limit(max_per_hour: int = MAX_BLOCKS_PER_HOUR, log_dir: str = "ru
     return True, f"Tần suất an toàn ({recent_blocks}/{max_per_hour} lần trong giờ qua)."
 
 
-def evaluate_action(action: str, target: str, context: Optional[dict] = None) -> PolicyDecision:
+def evaluate_action(action: str, target: str, context: Optional[dict] = None, log_dir: Optional[str] = None) -> PolicyDecision:
     """
     Thẩm định một hành động phản ứng dự kiến (Block IP, Unblock IP, ...).
     
@@ -136,8 +136,10 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
     - action: Tên hành động ("block_ip", "unblock_ip")
     - target: Đối tượng tác động (ví dụ: IP cần chặn)
     - context: Ngữ cảnh điều tra (alert, verdict, severity, confidence, evidence)
+    - log_dir: Thư mục chứa audit log và active blocks (mặc định "runs")
     """
     context = context or {}
+    effective_log_dir = log_dir or context.get("log_dir") or os.getenv("SOC_RUNS_DIR", "runs")
     
     # 1. Thẩm định hành động BLOCK IP
     if action == "block_ip":
@@ -193,19 +195,7 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
                 risk_level="CRITICAL"
             )
 
-        # d. Kiểm tra Rate Limiting (Giới hạn tần suất)
-        rate_ok, rate_msg = check_rate_limit(max_per_hour=MAX_BLOCKS_PER_HOUR)
-        if not rate_ok:
-            return PolicyDecision(
-                allowed=False,
-                action=action,
-                target=target,
-                reason=f"TỪ CHỐI BẢO MẬT: {rate_msg} Vui lòng đợi hoặc gỡ chặn các IP cũ trước khi thực hiện thêm.",
-                requires_approval=True,
-                risk_level="HIGH"
-            )
-
-        # e. Kiểm tra ngưỡng bằng chứng (Evidence Threshold)
+        # d. Kiểm tra ngưỡng bằng chứng (Evidence Threshold)
         verdict = context.get("verdict")
         confidence = context.get("confidence", "low")
         
@@ -227,6 +217,17 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None) ->
                 reason="Từ chối: Dữ liệu chưa đủ xác minh (insufficient_data) và độ tin cậy thấp, cần điều tra thêm trước khi chặn.",
                 requires_approval=True,
                 risk_level="MEDIUM"
+            )
+
+        # e. Kiểm tra Rate Limiting (Giới hạn tần suất)
+        rate_ok, rate_msg = check_rate_limit(max_per_hour=MAX_BLOCKS_PER_HOUR, log_dir=effective_log_dir)
+        if not rate_ok:
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=target,
+                reason=f"TỪ CHỐI BẢO MẬT: {rate_msg} Vui lòng đợi hoặc gỡ chặn các IP cũ trước khi thực hiện thêm.",
+                requires_approval=True,
             )
 
         # Mọi điều kiện an toàn đều vượt qua: Cho phép nhưng BẮT BUỘC người phê duyệt (Human-in-the-Loop)

@@ -1,9 +1,15 @@
 import json
 import os
+import sys
 import time
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
+
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from monitor_daemon import SOCMonitorDaemon, extract_ip_from_alert
 
 class TestMonitorDaemon(unittest.TestCase):
@@ -37,9 +43,11 @@ class TestMonitorDaemon(unittest.TestCase):
         self.daemon.ip_cooldown[ip] = time.time() - (16 * 60)
         self.assertFalse(self.daemon.is_in_cooldown(ip))
 
+    @patch("monitor_daemon.record_audit_log")
+    @patch("monitor_daemon.save_active_block")
     @patch("monitor_daemon.send_alert_email")
     @patch("monitor_daemon.investigate")
-    def test_handle_alert_autonomous_block(self, mock_investigate, mock_send_email):
+    def test_handle_alert_autonomous_block(self, mock_investigate, mock_send_email, mock_save_block, mock_audit_log):
         mock_investigate.return_value = {
             "model": "qwen3:4b",
             "conclusion": {
@@ -67,11 +75,14 @@ class TestMonitorDaemon(unittest.TestCase):
         self.assertEqual(self.daemon.total_blocks_executed, 1)
         self.assertTrue(self.daemon.is_in_cooldown("192.168.56.102"))
         mock_send_email.assert_called_once()
+        mock_save_block.assert_called_once()
+        mock_audit_log.assert_called_once()
 
+    @patch("monitor_daemon.record_audit_log")
     @patch("monitor_daemon.unblock_ip")
     @patch("monitor_daemon.load_active_blocks")
     @patch("monitor_daemon.remove_active_block")
-    def test_expire_active_blocks(self, mock_remove, mock_load, mock_unblock):
+    def test_expire_active_blocks(self, mock_remove, mock_load, mock_unblock, mock_audit_log):
         expired_time = (datetime.now() - timedelta(minutes=1)).isoformat()
         mock_load.return_value = {
             "192.168.56.102": {
@@ -82,6 +93,7 @@ class TestMonitorDaemon(unittest.TestCase):
         }
         self.daemon.check_and_expire_active_blocks()
         mock_remove.assert_called_with("192.168.56.102")
+        mock_audit_log.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

@@ -130,26 +130,28 @@ class TestPolicyEngine(unittest.TestCase):
 
     def test_ttl_and_active_blocks_management(self):
         """Kiểm tra quản lý danh sách IP bị chặn kèm thời hạn cách ly (TTL)."""
-        test_dir = os.path.join(ROOT_DIR, "runs")
-        test_ip = "198.51.100.77"
+        import tempfile
+        with tempfile.TemporaryDirectory() as test_dir:
+            test_ip = "198.51.100.77"
 
-        # 1. Lưu block với TTL 15 phút
-        entry = save_active_block(test_ip, ttl_minutes=15, reason="Test TTL", log_dir=test_dir)
-        self.assertEqual(entry["ip"], test_ip)
-        self.assertEqual(entry["ttl_minutes"], 15)
+            # 1. Lưu block với TTL 15 phút
+            entry = save_active_block(test_ip, ttl_minutes=15, reason="Test TTL", log_dir=test_dir)
+            self.assertEqual(entry["ip"], test_ip)
+            self.assertEqual(entry["ttl_minutes"], 15)
 
-        # 2. Đọc lại danh sách
-        blocks = load_active_blocks(log_dir=test_dir)
-        self.assertIn(test_ip, blocks)
+            # 2. Đọc lại danh sách
+            blocks = load_active_blocks(log_dir=test_dir)
+            self.assertIn(test_ip, blocks)
 
-        # 3. Gỡ bỏ
-        removed = remove_active_block(test_ip, log_dir=test_dir)
-        self.assertTrue(removed)
-        blocks_after = load_active_blocks(log_dir=test_dir)
-        self.assertNotIn(test_ip, blocks_after)
+            # 3. Gỡ bỏ
+            removed = remove_active_block(test_ip, log_dir=test_dir)
+            self.assertTrue(removed)
+            blocks_after = load_active_blocks(log_dir=test_dir)
+            self.assertNotIn(test_ip, blocks_after)
 
     def test_audit_logging(self):
         """Kiểm tra việc ghi nhật ký kiểm toán có cấu trúc."""
+        import tempfile
         decision = PolicyDecision(
             allowed=True,
             action="block_ip",
@@ -157,18 +159,18 @@ class TestPolicyEngine(unittest.TestCase):
             reason="Test policy pass",
             requires_approval=True
         )
-        test_dir = os.path.join(ROOT_DIR, "runs")
-        entry = record_audit_log(
-            action="block_ip",
-            target="203.0.113.77",
-            operator="SOC Analyst (Test)",
-            policy_decision=decision,
-            execution_result={"status": "ok", "message": "Rule added"},
-            verification_result={"verified": True, "rules_found": [{"rule_num": 1}]},
-            log_dir=test_dir
-        )
-        self.assertEqual(entry["action"], "block_ip")
-        self.assertEqual(entry["target"], "203.0.113.77")
+        with tempfile.TemporaryDirectory() as test_dir:
+            entry = record_audit_log(
+                action="block_ip",
+                target="203.0.113.77",
+                operator="SOC Analyst (Test)",
+                policy_decision=decision,
+                execution_result={"status": "ok", "message": "Rule added"},
+                verification_result={"verified": True, "rules_found": [{"rule_num": 1}]},
+                log_dir=test_dir
+            )
+            self.assertEqual(entry["action"], "block_ip")
+            self.assertEqual(entry["target"], "203.0.113.77")
 
 
 if __name__ == "__main__":
