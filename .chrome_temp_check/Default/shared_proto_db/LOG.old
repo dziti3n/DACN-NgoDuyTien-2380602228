@@ -1,4 +1,0 @@
-2026/10/24-00:28:53.144 277c Creating DB d:\soc-agent\.chrome_temp_check\Default\shared_proto_db since it was missing.
-2026/10/24-00:28:53.156 277c Reusing MANIFEST d:\soc-agent\.chrome_temp_check\Default\shared_proto_db/MANIFEST-000001
-2026/10/24-00:28:53.157 277c Recovering log #3
-2026/10/24-00:28:53.158 277c Reusing old log d:\soc-agent\.chrome_temp_check\Default\shared_proto_db/000003.log 

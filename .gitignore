@@ -20,7 +20,17 @@ soc_agent_key*
 *.log
 runs/*.json
 runs/*.log
+runs/alerts/
+runs/*.html
 !runs/.gitkeep
+
+# Dữ liệu tạm của Trình duyệt & Teamwork Subagents (KHÔNG COMMIT)
+.chrome_temp_check/
+.agents/teamwork/
+*.png
+*.jpg
+*.jpeg
+screenshot*
 
 # Bytecode và Cache
 __pycache__/
