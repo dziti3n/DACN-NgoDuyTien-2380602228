@@ -20,6 +20,8 @@ class TestMonitorDaemon(unittest.TestCase):
             cooldown_minutes=15,
             test_mode=True
         )
+        self.daemon.total_alerts_handled = 0
+        self.daemon.total_blocks_executed = 0
 
     def test_extract_ip_from_alert(self):
         alert1 = {"src_ip": "192.168.56.102"}
@@ -43,11 +45,20 @@ class TestMonitorDaemon(unittest.TestCase):
         self.daemon.ip_cooldown[ip] = time.time() - (16 * 60)
         self.assertFalse(self.daemon.is_in_cooldown(ip))
 
+    @patch("monitor_daemon.evaluate_action")
     @patch("monitor_daemon.record_audit_log")
     @patch("monitor_daemon.save_active_block")
     @patch("monitor_daemon.send_alert_email")
     @patch("monitor_daemon.investigate")
-    def test_handle_alert_autonomous_block(self, mock_investigate, mock_send_email, mock_save_block, mock_audit_log):
+    def test_handle_alert_autonomous_block(self, mock_investigate, mock_send_email, mock_save_block, mock_audit_log, mock_eval):
+        from policy_engine import PolicyDecision
+        mock_eval.return_value = PolicyDecision(
+            allowed=True,
+            action="block_ip",
+            target="192.168.56.102",
+            reason="Hợp lệ: IP kiểm tra đạt chuẩn an toàn",
+            requires_approval=True
+        )
         mock_investigate.return_value = {
             "model": "qwen3:4b",
             "conclusion": {

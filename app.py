@@ -48,6 +48,8 @@ from notifier import (
     send_alert_email,
 )
 from llm_client import get_llm_client
+from wazuh_listener import normalize_wazuh_alert
+from scripts.simulate_wazuh_alert import generate_wazuh_payload
 
 
 # ==============================================================================
@@ -205,46 +207,46 @@ def format_cyber_terminal_html(raw_text: str, query: str = "", max_lines: int = 
 
 
 # ==============================================================================
-# R2: STREAMLIT FRAGMENT (LIVE LOG STREAMING TỰ ĐỘNG CHU KỲ 2 GIÂY)
+# R2: STREAMLIT FRAGMENT (EVENT-DRIVEN CYBER TERMINAL - 0% CPU NỀN)
 # ==============================================================================
-@st.fragment(run_every="2s")
+@st.fragment
 def render_cyber_terminal_fragment():
     """
-    R2 REQUIREMENT: Khối Cyber Terminal tự động đọc nhật ký auth.log qua SSH mỗi 2 giây.
-    - Không cần người dùng bấm F5 hay refresh.
-    - Chạy độc lập trong fragment, không làm rung giật hoặc re-run toàn bộ trang.
+    Khối Cyber Terminal Event-Driven:
+    - Không chạy vòng lặp SSH nền (tiêu thụ 0.0% CPU khi rảnh rỗi).
+    - Hiển thị tức thời nhật ký sự kiện từ Wazuh SIEM và auth.log snapshot.
     - Đảo ngược thứ tự log (Newest on Top) hiển thị trực tiếp.
     """
     lines_cfg = st.session_state.get("lines_to_read", 100)
     search_query = st.session_state.get("terminal_filter", "")
 
-    # Tự động nạp log mới nhất từ server lab qua SSH (nếu không đang chạy kịch bản test đặc biệt)
-    if not st.session_state.get("run_test_simulation", False):
-        new_logs, err = fetch_live_logs(lines=lines_cfg)
-        if new_logs:
-            # Nếu có log mô phỏng đang được kích hoạt, bảo toàn các sự kiện tấn công ở đầu log
-            if st.session_state.get("sim_injected", False) and "192.168.56.102" in st.session_state.get("raw_logs", ""):
-                sim_lines = list(dict.fromkeys(l for l in st.session_state["raw_logs"].splitlines() if "192.168.56.102" in l))
-                st.session_state["raw_logs"] = new_logs.rstrip() + "\n" + "\n".join(sim_lines)
-            else:
-                st.session_state["raw_logs"] = new_logs
-
-            st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
-
-            # Tự động phân tích cảnh báo ngầm mỗi chu kỳ 2s
+    # Nạp nội dung log từ session_state hoặc file wazuh_alerts.jsonl cục bộ
+    raw_content = st.session_state.get("raw_logs", "")
+    if not raw_content:
+        w_file = Path("runs/wazuh_alerts.jsonl")
+        if w_file.exists():
             try:
-                events = parse_log(st.session_state["raw_logs"])
-                detected = [alert_to_dict(a) for a in detect_all(events, baseline_path="baseline.json")]
-                sim_alerts = [a for a in st.session_state.get("alerts", []) if a.get("src_ip") == "192.168.56.102"]
-                if sim_alerts:
-                    st.session_state["alerts"] = sim_alerts + [a for a in detected if a.get("src_ip") != "192.168.56.102"]
-                else:
-                    st.session_state["alerts"] = detected
+                loaded_lines = []
+                with open(w_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            entry = json.loads(line)
+                            fl = entry.get("raw_wazuh", {}).get("full_log")
+                            if fl:
+                                loaded_lines.append(fl)
+                if loaded_lines:
+                    raw_content = "\n".join(loaded_lines[-lines_cfg:])
+                    st.session_state["raw_logs"] = raw_content
             except Exception:
                 pass
 
-    # Render giao diện Cyber Console Stealth Cyber Ops
-    raw_content = st.session_state.get("raw_logs", "")
+    if not raw_content:
+        raw_content = (
+            f"[WAZUH EVENT-DRIVEN MODE]\n"
+            f"Trực chiến Webhook tại cổng 5000: Tiêu thụ 0.0% CPU (Đang chờ Alert từ Wazuh SIEM)...\n"
+            f"Bấm '🎯 Bắn Test Wazuh Alert' để thử nghiệm hoặc '🔄 Quét Log SSH' để nạp snapshot từ máy lab."
+        )
+
     all_lines = [l for l in raw_content.splitlines() if l.strip()]
     terminal_body = format_cyber_terminal_html(raw_content, query=search_query, max_lines=lines_cfg)
     fetch_time_str = st.session_state.get("log_fetch_time") or datetime.now().strftime("%H:%M:%S")
@@ -486,43 +488,53 @@ def main():
         st.session_state["sim_injected"] = False
     if "initial_log_fetched" not in st.session_state:
         st.session_state["initial_log_fetched"] = False
+    if "selected_wazuh_sim_type" not in st.session_state:
+        st.session_state["selected_wazuh_sim_type"] = "SSH Brute Force (Wazuh Rule 5712 - Level 10)"
 
-    # Nạp log ban đầu nếu chưa có dữ liệu và tự động phân tích cảnh báo sự cố
+    # Nạp dữ liệu ban đầu từ kho lưu trữ Wazuh cục bộ (tiết kiệm CPU, không gọi SSH nền)
     if not st.session_state.get("initial_log_fetched", False) and not st.session_state.get("raw_logs"):
         st.session_state["initial_log_fetched"] = True
-        initial_log, _ = fetch_live_logs(lines=100)
-        if initial_log:
-            st.session_state["raw_logs"] = initial_log
-            st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
+        w_file = Path("runs/wazuh_alerts.jsonl")
+        if w_file.exists():
             try:
-                events = parse_log(initial_log)
-                st.session_state["alerts"] = [alert_to_dict(a) for a in detect_all(events, baseline_path="baseline.json")]
+                recent_alerts = []
+                loaded_lines = []
+                with open(w_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            item = json.loads(line)
+                            alt = item.get("alert")
+                            if alt:
+                                recent_alerts.append(alt)
+                            fl = item.get("raw_wazuh", {}).get("full_log")
+                            if fl:
+                                loaded_lines.append(fl)
+                if recent_alerts:
+                    st.session_state["alerts"] = list(reversed(recent_alerts[-20:]))
+                if loaded_lines:
+                    st.session_state["raw_logs"] = "\n".join(loaded_lines[-100:])
+                    st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
             except Exception:
                 pass
 
-    # Kịch bản test mô phỏng: Đồng bộ ngay trước khi render để Cyber Terminal và Hàng đợi hiển thị tức thì
+    # Kịch bản test mô phỏng Wazuh SIEM: Đồng bộ ngay trước khi render để Cyber Terminal và Hàng đợi hiển thị tức thì
     if st.session_state.get("run_test_simulation", False) and not st.session_state.get("sim_injected", False):
-        sim_alert_early = {
-            "rule": "ssh_bruteforce",
-            "severity_hint": "critical",
-            "summary": "Phát hiện dò mật khẩu SSH từ 192.168.56.102: 12 lần thử thất bại, nhắm vào các tài khoản root, admin, ubuntu.",
-            "src_ip": "192.168.56.102",
-            "first_seen": datetime.now().isoformat(),
-            "last_seen": datetime.now().isoformat(),
-            "details": {
-                "src_ip": "192.168.56.102",
-                "total_failures": 12,
-                "users_tried": ["root", "admin", "ubuntu"],
-                "invalid_user_failures": 8,
-                "success_after_failures": []
-            }
-        }
-        sim_log_lines_early = (
-            f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')} dacnsoc sshd[61201]: Failed password for root from 192.168.56.102 port 49112 ssh2\n"
-            f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')} dacnsoc sshd[61203]: Failed password for invalid user admin from 192.168.56.102 port 49114 ssh2\n"
-            f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')} dacnsoc sshd[61207]: Failed password for ubuntu from 192.168.56.102 port 49118 ssh2\n"
-            f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')} dacnsoc sshd[61210]: PAM 9 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.56.102\n"
-        )
+        chosen_label = st.session_state.get("selected_wazuh_sim_type", "")
+        if "5710" in chosen_label:
+            sim_type = "invalid_user"
+        elif "5402" in chosen_label:
+            sim_type = "sudo_success"
+        elif "5405" in chosen_label or "5403" in chosen_label or "5401" in chosen_label or "Sudo" in chosen_label:
+            sim_type = "sudo_unauthorized"
+        elif "550" in chosen_label or "FIM" in chosen_label:
+            sim_type = "tamper"
+        else:
+            sim_type = "bruteforce"
+
+        sim_raw = generate_wazuh_payload(alert_type=sim_type, src_ip="192.168.56.102")
+        sim_alert_early = normalize_wazuh_alert(sim_raw)
+        sim_log_lines_early = sim_raw.get("full_log", "")
+
         st.session_state["raw_logs"] = st.session_state.get("raw_logs", "").rstrip() + "\n" + sim_log_lines_early
         st.session_state["alerts"] = [sim_alert_early] + [a for a in st.session_state.get("alerts", []) if a.get("src_ip") != "192.168.56.102"]
         st.session_state["sim_injected"] = True
@@ -572,13 +584,13 @@ def main():
         </div>
         <div style="display: flex; align-items: center; gap: 10px;">
             <span style="background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); color: #38bdf8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
-                LAB: 192.168.56.101:22
+                WAZUH: Port 5000 (Event-Driven)
             </span>
             <span style="background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); color: #c084fc; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
                 MODEL: qwen3:4b (Local)
             </span>
             <span style="background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); color: #34d399; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
-                SMTP: ON
+                ACTIVE DEFENSE: Safe UFW
             </span>
         </div>
     </div>
@@ -619,32 +631,50 @@ def main():
                 st.session_state["was_stopped"] = True
                 st.rerun()
         else:
-            # Khi hệ thống sẵn sàng: 3 nút tác chiến trực tiếp
-            b_col1, b_col2, b_col3 = st.columns([1.1, 1.2, 0.9])
+            # Lựa chọn kịch bản Wazuh mô phỏng chuẩn
+            st.selectbox(
+                "Kịch bản tấn công Wazuh mô phỏng:",
+                options=[
+                    "SSH Brute Force (Wazuh Rule 5712 - Level 10)",
+                    "SSH Invalid User Guessing (Wazuh Rule 5710 - Level 5)",
+                    "Sudo User Not in Sudoers (Wazuh Rule 5405 - Level 7)",
+                    "Sudo Escalation to Root (Wazuh Rule 5402 - Level 3)",
+                    "File Integrity Tampering FIM (Wazuh Rule 550 - Level 7)"
+                ],
+                index=0,
+                key="selected_wazuh_sim_type",
+                label_visibility="collapsed"
+            )
+
+            # 3 nút tác chiến
+            b_col1, b_col2, b_col3 = st.columns([1.3, 0.9, 0.8])
             with b_col1:
-                if st.button("🧪 Chạy Test Mô Phỏng", use_container_width=True, key="btn_start_sim", help="Mô phỏng tấn công SSH Bruteforce từ Kali 192.168.56.102: Kích hoạt ReAct, Policy Engine, UFW và gửi Gmail"):
+                if st.button("🎯 Bắn Test Wazuh Alert", use_container_width=True, key="btn_start_sim", help="Bắn cảnh báo mô phỏng chuẩn định dạng Wazuh SIEM: Kích hoạt ReAct, Policy Engine, UFW và gửi Gmail"):
                     st.session_state["run_test_simulation"] = True
                     st.session_state["system_status"] = "running_test"
                     st.rerun()
             with b_col2:
-                if st.button("⚡ Bắt Đầu Quét Liên Tục", use_container_width=True, key="btn_start_continuous", help="Khởi chạy vòng lặp giám sát tự hành định kỳ"):
+                if st.button("🔄 Quét Log SSH", use_container_width=True, key="btn_scan_single", help="Đọc auth.log từ máy lab qua SSH (1 lần snapshot)"):
+                    st.session_state["sim_injected"] = False
+                    with st.spinner("Đang kết nối SSH..."):
+                        lines_count = st.session_state.get("lines_to_read", 100)
+                        log_data, err = fetch_live_logs(lines=lines_count)
+                        if log_data:
+                            st.session_state["raw_logs"] = log_data
+                            st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
+                            try:
+                                events = parse_log(log_data)
+                                st.session_state["alerts"] = [alert_to_dict(a) for a in detect_all(events, baseline_path="baseline.json")]
+                            except Exception:
+                                pass
+                        elif err:
+                            st.error(f"Lỗi SSH: {err}")
+                    st.rerun()
+            with b_col3:
+                if st.button("⚡ Quét Định Kỳ", use_container_width=True, key="btn_start_continuous", help="Bật chế độ legacy polling (quét định kỳ 20s)"):
                     st.session_state["continuous_scan"] = True
                     st.session_state["system_status"] = "scanning"
                     st.rerun()
-            with b_col3:
-                if st.button("🔄 Quét Ngay 1 Lần", use_container_width=True, key="btn_scan_single", help="Đọc auth.log và phân tích tức thời"):
-                    st.session_state["sim_injected"] = False
-                    lines_count = st.session_state.get("lines_to_read", 100)
-                    log_data, _ = fetch_live_logs(lines=lines_count)
-                    if log_data:
-                        st.session_state["raw_logs"] = log_data
-                        st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
-                        try:
-                            events = parse_log(log_data)
-                            st.session_state["alerts"] = [alert_to_dict(a) for a in detect_all(events, baseline_path="baseline.json")]
-                        except Exception:
-                            pass
-                        st.rerun()
 
         # 2. BỘ LỌC TÌM KIẾM IP/USER TỨC THỜI
         f_col1, f_col2 = st.columns([3.8, 1.2])
@@ -753,21 +783,24 @@ def main():
                         elif event_type == "error":
                             live_box.error(f"⚠️ {payload.get('error')}")
 
-                    sim_alert = {
-                        "rule": "ssh_bruteforce",
-                        "severity_hint": "critical",
-                        "summary": "Phát hiện dò mật khẩu SSH từ 192.168.56.102: 12 lần thử thất bại, nhắm vào các tài khoản root, admin, ubuntu.",
-                        "src_ip": "192.168.56.102",
-                        "first_seen": datetime.now().isoformat(),
-                        "last_seen": datetime.now().isoformat(),
-                        "details": {
-                            "src_ip": "192.168.56.102",
-                            "total_failures": 12,
-                            "users_tried": ["root", "admin", "ubuntu"],
-                            "invalid_user_failures": 8,
-                            "success_after_failures": []
-                        }
-                    }
+                    sim_alert = None
+                    for a in st.session_state.get("alerts", []):
+                        if a.get("src_ip") == "192.168.56.102":
+                            sim_alert = a
+                            break
+                    if not sim_alert:
+                        chosen_label = st.session_state.get("selected_wazuh_sim_type", "")
+                        if "5710" in chosen_label:
+                            stype = "invalid_user"
+                        elif "5402" in chosen_label:
+                            stype = "sudo_success"
+                        elif "5405" in chosen_label or "5403" in chosen_label or "5401" in chosen_label or "Sudo" in chosen_label:
+                            stype = "sudo_unauthorized"
+                        elif "550" in chosen_label or "FIM" in chosen_label:
+                            stype = "tamper"
+                        else:
+                            stype = "bruteforce"
+                        sim_alert = normalize_wazuh_alert(generate_wazuh_payload(stype, "192.168.56.102"))
 
                     # 1. AI ReAct Investigation
                     try:
@@ -783,33 +816,32 @@ def main():
                                 {
                                     "tool": "search_auth_logs",
                                     "args": {"src_ip": "192.168.56.102", "lines": 200},
-                                    "reason": "Tra cứu các sự kiện xác thực SSH từ IP khả nghi 192.168.56.102",
+                                    "reason": "Tra cứu các sự kiện xác thực từ IP khả nghi 192.168.56.102",
                                     "result": {"status": "ok", "data": {"failed_attempts": 12, "target_users": ["root", "admin", "ubuntu"]}}
                                 }
                             ],
                             "conclusion": {
                                 "verdict": "malicious_activity_likely",
-                                "severity": "critical",
+                                "severity": sim_alert.get("severity_hint", "critical"),
                                 "confidence": "high",
-                                "summary": "Phát hiện tấn công dò mật khẩu SSH từ IP 192.168.56.102: 12 lần thử thất bại liên tiếp nhắm vào các tài khoản đặc quyền.",
+                                "summary": f"Wazuh SIEM xác nhận sự cố: {sim_alert.get('summary')}",
                                 "evidence": [
-                                    "Phát hiện tấn công dò mật khẩu SSH từ 192.168.56.102",
-                                    "12 lần thử mật khẩu thất bại liên tiếp trong thời gian ngắn",
-                                    "Nhắm vào các tài khoản đặc quyền (root, admin, ubuntu)"
+                                    f"Khớp quy tắc Wazuh: {sim_alert.get('summary')}",
+                                    f"IP nguồn tấn công: {sim_alert.get('src_ip')}"
                                 ],
                                 "missing_data": [],
-                                "recommended_actions": ["Chặn IP 192.168.56.102 trên tường lửa UFW"]
+                                "recommended_actions": [f"Chặn IP {sim_alert.get('src_ip')} trên tường lửa UFW"]
                             }
                         }
 
                     conc = run_res.get("conclusion", {})
                     if conc.get("verdict") == "insufficient_data":
                         conc["verdict"] = "malicious_activity_likely"
-                        conc["severity"] = "critical"
+                        conc["severity"] = sim_alert.get("severity_hint", "critical")
                         conc["confidence"] = "high"
-                        conc["summary"] = "Phát hiện tấn công dò mật khẩu SSH từ IP 192.168.56.102: 12 lần thử thất bại liên tiếp nhắm vào các tài khoản root, admin, ubuntu."
-                        conc["evidence"] = ["Phát hiện tấn công dò mật khẩu SSH từ 192.168.56.102", "12 lần thử mật khẩu thất bại"]
-                        conc["recommended_actions"] = ["Chặn IP 192.168.56.102 trên tường lửa UFW"]
+                        conc["summary"] = f"Wazuh SIEM xác nhận sự cố: {sim_alert.get('summary')}"
+                        conc["evidence"] = [f"Phát hiện tấn công từ IP {sim_alert.get('src_ip')}", "Chuỗi vi phạm chính sách an ninh"]
+                        conc["recommended_actions"] = [f"Chặn IP {sim_alert.get('src_ip')} trên tường lửa UFW"]
 
                     live_box.update(label="🎉 Phiên điều tra AI ReAct hoàn tất thành công!", state="complete", expanded=False)
 

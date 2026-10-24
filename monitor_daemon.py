@@ -68,6 +68,7 @@ class SOCMonitorDaemon:
         self.lines_to_check = lines_to_check
         self.cooldown_minutes = cooldown_minutes
         self.test_mode = test_mode
+        self.mode = os.getenv("DAEMON_MODE", "event-driven").lower()
 
         self.ip_cooldown: Dict[str, float] = {}  # ip -> timestamp lần cuối điều tra
         self.running = False
@@ -333,11 +334,33 @@ class SOCMonitorDaemon:
 
         self._save_state()
 
-    def start(self):
-        """Vòng lặp chạy ngầm liên tục của Daemon."""
+    def start(self, mode: Optional[str] = None):
+        """Khởi động Daemon theo chế độ Event-Driven (Wazuh Webhook) hoặc Legacy Polling."""
+        active_mode = mode or self.mode
+        if active_mode in ("event-driven", "webhook", "wazuh"):
+            from wazuh_listener import start_wazuh_listener
+            webhook_port = int(os.getenv("WEBHOOK_PORT", "5000"))
+            webhook_host = os.getenv("WEBHOOK_HOST", "0.0.0.0")
+            print("\n" + "=" * 75)
+            print("🚀 KHỞI ĐỘNG TIẾN TRÌNH GIÁM SÁT AN NINH EVENT-DRIVEN (WAZUH SIEM INTEGRATION)")
+            print(f"   Chế độ:           SIEM-Push Webhook Receiver (0% CPU khi rảnh)")
+            print(f"   Địa chỉ lắng nghe: http://{webhook_host}:{webhook_port}/api/v1/wazuh-alert")
+            print(f"   Chế độ Auto-Block: {'BẬT (Full Autonomous)' if self.auto_block else 'TẮT (Semi-Autonomous)'}")
+            print(f"   Thời hạn TTL:     15 phút (Tự động gỡ bỏ qua Scheduler)")
+            print("=" * 75 + "\n")
+            start_wazuh_listener(
+                host=webhook_host,
+                port=webhook_port,
+                auto_block=self.auto_block,
+                test_mode=self.test_mode,
+                blocking=True
+            )
+            return
+
+        # Chế độ Legacy Polling qua SSH
         self.running = True
         print("\n" + "=" * 70)
-        print("🚀 KHỞI ĐỘNG TIẾN TRÌNH GIÁM SÁT AN NINH TỰ HÀNH (SOC MONITOR DAEMON)")
+        print("🚀 KHỞI ĐỘNG TIẾN TRÌNH GIÁM SÁT AN NINH (LEGACY SSH POLLING)")
         print(f"   Máy chủ mục tiêu: {HOST}")
         print(f"   Chu kỳ thăm dò:  {self.poll_interval} giây/lần")
         print(f"   Chế độ Auto-Block: {'BẬT (Full Autonomous)' if self.auto_block else 'TẮT (Semi-Autonomous)'}")
@@ -368,5 +391,12 @@ class SOCMonitorDaemon:
 
 
 if __name__ == "__main__":
-    daemon = SOCMonitorDaemon()
-    daemon.start()
+    import argparse
+    parser = argparse.ArgumentParser(description="AI SOC Autonomous Monitor Daemon")
+    parser.add_argument("--mode", choices=["event-driven", "poll"], default=os.getenv("DAEMON_MODE", "event-driven"), help="Chế độ giám sát: event-driven (Wazuh Webhook) hoặc poll (SSH polling)")
+    parser.add_argument("--no-block", action="store_true", help="Tắt tự động block IP")
+    parser.add_argument("--test-mode", action="store_true", help="Chế độ kiểm thử")
+    args = parser.parse_args()
+
+    daemon = SOCMonitorDaemon(auto_block=not args.no_block, test_mode=args.test_mode)
+    daemon.start(mode=args.mode)

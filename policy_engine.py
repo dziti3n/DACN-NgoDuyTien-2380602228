@@ -23,6 +23,7 @@ DEFAULT_PROTECTED_IPS = {
     "192.168.56.1",    # Host Windows (VirtualBox Host-Only Adapter)
     "192.168.56.101",  # Target Lab Server Linux
     "10.0.2.2",        # VirtualBox NAT Gateway
+    "192.168.56.254",  # Host-Only Subnet Gateway
 }
 
 DEFAULT_PROTECTED_NETWORKS = [

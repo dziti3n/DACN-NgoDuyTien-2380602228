@@ -100,6 +100,7 @@ class TestPolicyEngine(unittest.TestCase):
 
     def test_alert_correlation_allows_valid_target(self):
         """Khi IP đề xuất trùng khớp với IP nguồn trong Alert thì Policy chấp thuận."""
+        import tempfile
         valid_target = "192.168.56.102"
         context = {
             "alert": {"src_ip": "192.168.56.102", "rule": "ssh_bruteforce"},
@@ -107,9 +108,10 @@ class TestPolicyEngine(unittest.TestCase):
             "verdict": "malicious_activity_likely",
             "confidence": "high"
         }
-        decision = evaluate_action("block_ip", valid_target, context)
-        self.assertTrue(decision.allowed, "IP nằm trong cảnh báo và ngoài whitelist phải được chấp thuận!")
-        self.assertTrue(decision.requires_approval)
+        with tempfile.TemporaryDirectory() as td:
+            decision = evaluate_action("block_ip", valid_target, context, log_dir=td)
+            self.assertTrue(decision.allowed, "IP nằm trong cảnh báo và ngoài whitelist phải được chấp thuận!")
+            self.assertTrue(decision.requires_approval)
 
     def test_verdict_threshold_benign(self):
         """Nếu Agent kết luận benign_likely thì KHÔNG được phép block IP."""

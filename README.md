@@ -1,56 +1,56 @@
-# 🛡️ AI SOC Investigation & Autonomous Defense Platform
+# 🛡️ AI SOC Investigation & Autonomous Defense Platform (Wazuh SIEM Event-Driven)
 
-Hệ thống tác tử an ninh mạng tự hành (**Autonomous Security Investigation & Controlled Defense Platform**) kết hợp mô hình ngôn ngữ lớn cục bộ (**Local On-Premises LLM**) với động cơ điều tra **ReAct (Reasoning + Acting)**, lớp kiểm soát an toàn xác định (**Deterministic Policy Engine Guardrails**), và cơ chế phản ứng tự động trên tường lửa Linux (**UFW Defense**) cùng hệ thống báo động qua Gmail.
+Hệ thống tác tử an ninh mạng tự hành (**Autonomous Security Investigation & Controlled Defense Platform**) kết hợp mô hình ngôn ngữ lớn cục bộ (**Local On-Premises LLM**) với động cơ điều tra **ReAct (Reasoning + Acting)**, lớp kiểm soát an toàn xác định (**Deterministic Policy Engine Guardrails**), tích hợp **Wazuh SIEM (Tier 1)** nhả Alert qua **Event-Driven Webhook (Tier 2)**, và cơ chế phản ứng tự động trên tường lửa Linux (**UFW Defense**) cùng hệ thống báo động qua Gmail.
 
-Hệ thống hoạt động tương đương một **SOC Analyst Tier 1 / Tier 2 kết hợp SOAR mini**, tự động giám sát máy chủ Linux, phát hiện tấn công, thu thập chứng cứ đa chiều, thẩm định chính sách an toàn và thực thi cô lập kẻ tấn công trong thời gian thực.
+Hệ thống thay thế cơ chế quét polling liên tục qua SSH bằng mô hình hướng sự kiện an toàn: Webhook được bảo vệ bằng **xác thực token (X-SOC-Token)**, giới hạn kết nối trong dải **Host-Only (`192.168.56.0/24`)**, xử lý sự kiện qua **hàng đợi tuần tự (FIFO Queue)** và kiểm định chặt chẽ dữ liệu đầu vào.
 
 ---
 
-## 🏛️ Kiến trúc Tổng thể Hệ thống
+## 🏛️ Kiến trúc Tổng thể Hệ thống (SIEM-Push / Event-Driven)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           MÁY CHỦ LINUX LAB (UBUNTU)                           │
-│  /var/log/auth.log   •   sshd_config   •   crontab   •   ss/ps   •   baseline   │
-│                                                                                 │
-│         ▲                                                    │ (UFW Rule)       │
-│         │ SSH Read-Only (Paramiko)                           ▼                  │
-│         │                                        /usr/local/sbin/soc-block-ip   │
-│         │                                        /usr/local/sbin/soc-unblock-ip │
-└─────────┼────────────────────────────────────────────────────▲──────────────────┘
-          │                                                    │
-══════════╪════════════════════════════════════════════════════╪═══════════════════
-          │                                                    │
-┌─────────▼────────────────────────────────────────────────────┴──────────────────┐
-│                    MÁY HOST WINDOWS (AI SOC CONTROL CENTER)                     │
+│                      1. MÁY CHỦ GIÁM SÁT (LAB ENDPOINT UBUNTU)                 │
+│  /var/log/auth.log   •   Wazuh Agent (Đọc log tại chỗ qua inotify/journald)    │
+│                                      │                                          │
+│                                      ▼ Đẩy log nội bộ (Port 1514)               │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                      2. MÁY CHỦ WAZUH SIEM MANAGER (TIER 1 SOC)                 │
+│  • Wazuh Rules Engine (Rule 5712, 5710, 5401, 5402, 550, MITRE T1110, T1548)   │
+│  • Custom Webhook Integration (/var/ossec/integrations/custom-ai-soc)           │
+│                                      │                                          │
+│                                      ▼ HTTP POST (Token Header, Port 5000)      │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                      3. MÁY HOST WINDOWS (AI SOC CONTROL CENTER - TIER 2)       │
 │                                                                                 │
 │  ┌───────────────────────┐         ┌─────────────────────────────────────────┐  │
-│  │   detection.py        │         │   agent.py (ReAct Investigation)        │  │
-│  │   • SSH Bruteforce    │ ──────> │   • Local Ollama (qwen3:4b, seed=42)    │  │
-│  │   • Sudo Abuse        │ Cảnh báo│   • MAX_STEPS = 3, Evidence Extraction  │  │
-│  │   • Baseline Tampering│         │   • 6 Read-only Investigation Tools     │  │
+│  │   wazuh_listener.py   │         │   agent.py (ReAct Investigation)        │  │
+│  │   • Token Auth (X-SOC)│ ──────> │   • Local Ollama (qwen3:4b, seed=42)    │  │
+│  │   • FIFO Queue Worker │ Alert   │   • Triage nhanh từ dữ liệu SIEM        │  │
+│  │   • Schema Validation │         │   • Sandbox <untrusted_tool_output>     │  │
 │  └───────────────────────┘         └────────────────────┬────────────────────┘  │
-│             ▲                                           │                       │
-│             │ Log events                                ▼ Đề xuất phản ứng      │
-│  ┌──────────┴────────────┐         ┌─────────────────────────────────────────┐  │
-│  │   monitor_daemon.py   │         │   policy_engine.py (Guardrails)         │  │
-│  │   • Quét ngầm định kỳ │         │   • Protected IP Whitelist (Anti-Lockout│  │
-│  │   • Cooldown 15 phút  │         │   • Anti-Prompt Injection Correlation   │  │
-│  │   • Quản lý TTL 15m   │         │   • Rate Limiting (Tối đa 5 lần/giờ)    │  │
-│  └──────────┬────────────┘         │   • TTL 15 phút (runs/active_blocks)    │  │
-│             │                      └────────────────────┬────────────────────┘  │
-│             │ Cảnh báo HTML                             │                       │
-│             ▼                                           ▼ Thực thi              │
+│             │                                           │                       │
+│             ▼ Audit / Log                               ▼ Đề xuất phản ứng      │
 │  ┌───────────────────────┐         ┌─────────────────────────────────────────┐  │
-│  │   notifier.py         │         │   tools.py (Active Defense)             │  │
-│  │   • Gmail SMTP 587    │         │   • block_ip(ip) via Safe Wrapper       │  │
-│  │   • Báo động HTML SOC │         │   • verify_response(ip) via UFW         │  │
-│  │   • Preview Offline   │         │   • Structured Audit Trail (SIEM-ready) │  │
-│  └───────────────────────┘         └─────────────────────────────────────────┘  │
+│  │   runs/wazuh_alerts   │         │   policy_engine.py (Guardrails)         │  │
+│  │   • Event Queue       │         │   • Protected IP Whitelist (Anti-Lockout│  │
+│  │   • SIEM Audit Stream │         │   • Anti-Prompt Injection Correlation   │  │
+│  │   • Quản lý TTL 15m   │         │   • Rate Limiting (Tối đa 5 lần/giờ)    │  │
+│  └───────────────────────┘         │   • TTL 15 phút (runs/active_blocks)    │  │
+│                                    └────────────────────┬────────────────────┘  │
+│                                                         │                       │
+│             ┌───────────────────────────────────────────┴─────────────────┐     │
+│             ▼ Cảnh báo HTML                             ▼ Thực thi UFW    │     │
+│  ┌───────────────────────┐         ┌─────────────────────────────────┐   │     │
+│  │   notifier.py         │         │   tools.py (Active Defense)     │   │     │
+│  │   • Gmail SMTP 587    │         │   • /usr/local/sbin/soc-block-ip│   │     │
+│  │   • Báo động HTML SOC │         │   • verify_response(ip) via UFW │   │     │
+│  │   • Preview Offline   │         │   • Structured Audit Trail      │   │     │
+│  └───────────────────────┘         └─────────────────────────────────┘   │     │
 │                                                                                 │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
 │  │  app.py: AI SOC Command Center (Giao diện Streamlit Hợp nhất 50% / 50%)   │  │
-│  │  • Live Cyber Terminal Log Streamer   • Bắn Test Mô Phỏng Tấn Công Nhanh   │  │
+│  │  • Event-Driven Cyber Terminal (Không SSH ngốn CPU) • Bắn Test Wazuh Alert│  │
 │  │  • Trực quan hóa suy luận ReAct Live  • Phê duyệt HITL & Audit Viewer     │  │
 │  └───────────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────────┘
@@ -129,11 +129,15 @@ soc-agent/
 ├── scripts/
 │   ├── setup_lab_guardrails.sh  # Script thiết lập wrapper scripts & thu hẹp sudoers trên server lab
 │   └── test_autonomous_flow.py  # Script kiểm thử luồng tự hành trọn gói
-├── tests/                   # Bộ kiểm thử tự động toàn diện
-│   ├── test_policy_engine.py    # Kiểm thử Whitelist, Anti-Injection, TTL, Rate Limit (10 tests)
-│   ├── test_detection_rules.py  # Kiểm thử 11 kịch bản phát hiện vi phạm
-│   ├── test_notifier.py         # Kiểm thử sinh HTML và xử lý ngoại lệ SMTP (3 tests)
-│   ├── test_monitor_daemon.py   # Kiểm thử logic tự hành, cooldown, gỡ chặn TTL (4 tests)
+├── tests/                   # Bộ kiểm thử tự động toàn diện (65 checks)
+│   ├── test_fast_path_bypass.py # Kiểm thử bypass Fast-Path (Metachars, Lookalike, Suffix, Injection) (12 tests)
+│   ├── test_wazuh_listener.py   # Kiểm thử Webhook Listener, IP Validator, Schema 422, Fast-Path (10 tests)
+│   ├── test_wazuh_integration.py # Kiểm thử luồng tích hợp Webhook FIFO Queue, HTTP 200/401/422 (8 tests)
+│   ├── test_policy_engine.py    # Kiểm thử Whitelist, Anti-Injection, TTL, Rate Limit (9 tests)
+│   ├── test_monitor_daemon.py   # Kiểm thử logic tự hành, cooldown, gỡ chặn TTL (7 tests)
+│   ├── test_notifier.py         # Kiểm thử sinh HTML và xử lý ngoại lệ SMTP (4 tests)
+│   ├── test_ui_app.py           # Kiểm thử giao diện Command Center, formatters, badges (4 tests)
+│   ├── test_detection_rules.py  # Kiểm thử 11 kịch bản phát hiện vi phạm (11 heuristic checks)
 │   ├── test_llm.py              # Kiểm thử kết nối mô hình LLM cục bộ Ollama
 │   └── test_tools.py            # Kiểm thử công cụ điều tra trên môi trường lab
 ├── requirements.txt         # Danh mục thư viện Python
@@ -240,7 +244,11 @@ python cli.py block 192.168.56.102
 # 6. Gỡ chặn 1 IP trên tường lửa
 python cli.py unblock 192.168.56.102
 
-# 7. Chạy kiểm thử tự động toàn dự án
+# 7. Chạy bộ đánh giá định lượng 40 kịch bản có gán nhãn (Mock hoặc Live)
+python cli.py benchmark --mock
+python cli.py benchmark --live --limit 5
+
+# 8. Chạy kiểm thử tự động toàn dự án (54 unittest + 11 heuristic rules = 65 checks)
 python cli.py test
 ```
 
@@ -259,8 +267,11 @@ python cli.py test
 
 ### Hạn chế Kỹ thuật Hiện tại
 1. **Phạm vi Log:** Hệ thống tập trung vào log hệ điều hành Linux và xác thực SSH/Sudo; chưa tích hợp bộ bóc tách chuyên sâu cho log tầng ứng dụng Web (Nginx/Apache access log) hoặc cơ sở dữ liệu.
-2. **Quy mô Mô hình LLM:** Dự án sử dụng mô hình SLM 4B (`qwen3:4b`) tối ưu hóa để vận hành mượt mà trên phần cứng máy tính cá nhân (GPU rời RTX 3050). Năng lực xử lý ngữ cảnh cực dài và suy luận đa tầng bị giới hạn so với các mô hình đám mây thương mại cỡ lớn, nhưng đổi lại đảm bảo tính bảo mật và quyền riêng tư dữ liệu tuyệt đối (On-Premises).
+2. **Quy mô Mô hình LLM:** Dự án sử dụng mô hình SLM 4B (`qwen3:4b`) tối ưu hóa để vận hành trên phần cứng máy tính cá nhân (GPU rời RTX 3050). Năng lực xử lý ngữ cảnh cực dài và suy luận đa tầng bị giới hạn so với các mô hình đám mây thương mại cỡ lớn, nhưng đổi lại đảm bảo tính bảo mật và quyền riêng tư dữ liệu tuyệt đối (On-Premises).
 3. **Phạm vi Phản ứng Mạng:** Biện pháp cô lập dựa trên tường lửa cục bộ UFW trên máy chủ đích, chưa tích hợp API của các thiết bị mạng biên hoặc tường lửa phần cứng chuyên dụng (Palo Alto, Fortinet, pfSense).
+4. **Hạn chế Không gian Địa chỉ IP:** Bộ kiểm tra schema của Webhook Listener hiện chỉ áp dụng cho định dạng IPv4; chưa hỗ trợ phân tích và cách ly địa chỉ IPv6.
+5. **Điều kiện Đo lường Thời gian Đáp ứng Webhook:** Chỉ số độ trễ tiếp nhận < 5ms được đo trong điều kiện mạng nội bộ Host-Only/Loopback giữa máy ảo và máy host, chưa tính đến độ trễ định tuyến của mạng diện rộng.
+6. **Bảo mật Tệp Chuyển tiếp & Vòng đời Token:** Token xác thực Webhook được nhúng trong script `/var/ossec/integrations/custom-ai-soc` trên máy chủ Wazuh Manager; tệp này bắt buộc phải được bảo vệ bằng quyền truy cập nghiêm ngặt (`chmod 750 root:wazuh`) và đơn vị vận hành cần thiết lập quy trình xoay vòng token định kỳ.
 
 ---
 

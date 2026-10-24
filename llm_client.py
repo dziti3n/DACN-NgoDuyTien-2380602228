@@ -77,13 +77,13 @@ class OllamaLocalClient:
         self.seed = int(os.getenv("OLLAMA_SEED", str(seed)))
         self.temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.0"))
         
-        # Timeout 45s cho mỗi lượt gọi LLM
-        self.client = httpx.Client(timeout=45.0)
+        # Timeout 120s đảm bảo hoàn tất suy luận ngay cả khi máy tính chạy hoàn toàn bằng CPU
+        self.client = httpx.Client(timeout=120.0)
 
     def generate(self, system, user, retries=1):
         """Gửi prompt tới Ollama qua OpenAI-compatible chat endpoint với temperature=0 và seed cố định.
-        Tối ưu tốc độ cao (High-Performance Inference): Prefill '{\\n' và giới hạn token để triệt tiêu
-        suy luận dài dòng (<think>), giúp phản hồi ngay trong 2-6 giây.
+        Tối ưu tốc độ cao: Prefill '{\\n', ghim VRAM 60 phút (keep_alive: 60m),
+        và giới hạn token tối ưu để triệt tiêu thời gian chờ.
         """
         import httpx
 
@@ -103,9 +103,11 @@ class OllamaLocalClient:
             "messages": messages,
             "temperature": self.temperature,
             "seed": self.seed,
-            "max_tokens": 400,
+            "max_tokens": 300,
+            "keep_alive": "60m",
             "options": {
-                "num_predict": 400,
+                "num_ctx": 2048,
+                "num_predict": 300,
                 "temperature": self.temperature,
                 "seed": self.seed,
             },

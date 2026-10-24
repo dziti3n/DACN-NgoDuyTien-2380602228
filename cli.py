@@ -40,6 +40,8 @@ from policy_engine import (
 )
 from notifier import send_test_email, get_email_config
 from monitor_daemon import SOCMonitorDaemon
+from wazuh_listener import start_wazuh_listener
+from scripts.simulate_wazuh_alert import send_simulated_alert
 
 
 def extract_ip(text):
@@ -289,13 +291,44 @@ def cmd_unblock(args):
 
 def cmd_monitor(args):
     """Khởi chạy tiến trình Giám sát An ninh Tự hành (Autonomous SOAR Daemon)."""
+    mode = getattr(args, "mode", "event-driven")
     daemon = SOCMonitorDaemon(
         poll_interval=args.interval,
         auto_block=False if args.no_auto_block else None,
         lines_to_check=args.lines,
         cooldown_minutes=args.cooldown
     )
-    daemon.start()
+    daemon.start(mode=mode)
+
+
+def cmd_listen(args):
+    """Khởi chạy Wazuh Webhook Server đón nhận Alert từ SIEM."""
+    start_wazuh_listener(
+        host=args.host,
+        port=args.port,
+        auto_block=not args.no_auto_block,
+        test_mode=args.test_mode,
+        blocking=True
+    )
+
+
+def cmd_mock_alert(args):
+    """Bắn thử nghiệm một Alert Wazuh chuẩn JSON tới Webhook Server."""
+    send_simulated_alert(
+        alert_type=args.type,
+        src_ip=args.ip,
+        target_user=args.user,
+        host=args.host,
+        port=args.port,
+        auth_token=getattr(args, "token", None)
+    )
+
+
+def cmd_benchmark(args):
+    """Chạy đánh giá định lượng hệ thống (Accuracy, FPR, Latency)."""
+    from scripts.benchmark_wazuh import run_benchmark
+    use_mock = not getattr(args, "live", False) or getattr(args, "mock", False)
+    run_benchmark(verbose=True, mock_mode=use_mock, limit=getattr(args, "limit", None))
 
 
 def cmd_test_email(args):
@@ -331,6 +364,9 @@ def cmd_test(args):
     """Chạy toàn bộ các bộ kiểm thử trong thư mục tests/."""
     print("[*] Đang thực thi toàn bộ bài kiểm thử tự động trong tests/...\n")
     test_files = [
+        "tests/test_fast_path_bypass.py",
+        "tests/test_wazuh_listener.py",
+        "tests/test_wazuh_integration.py",
         "tests/test_policy_engine.py",
         "tests/test_notifier.py",
         "tests/test_monitor_daemon.py",
@@ -352,13 +388,32 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Lệnh chức năng")
 
-    # Lệnh: monitor (Mới: Autonomous SOAR Daemon)
+    # Lệnh: monitor (Autonomous SOAR Daemon)
     p_mon = subparsers.add_parser("monitor", help="Khởi động tiến trình Giám sát Tự hành liên tục (SOAR Daemon)")
-    p_mon.add_argument("-i", "--interval", type=int, default=None, help="Chu kỳ thăm dò tính theo giây (mặc định: đọc từ .env hoặc 20s)")
-    p_mon.add_argument("-l", "--lines", type=int, default=300, help="Số dòng log auth.log kiểm tra mỗi chu kỳ (mặc định: 300)")
+    p_mon.add_argument("-m", "--mode", choices=["event-driven", "poll"], default="event-driven", help="Chế độ giám sát: event-driven (Wazuh Webhook) hoặc poll (SSH polling)")
+    p_mon.add_argument("-i", "--interval", type=int, default=None, help="Chu kỳ thăm dò tính theo giây (khi ở chế độ poll)")
+    p_mon.add_argument("-l", "--lines", type=int, default=300, help="Số dòng log auth.log kiểm tra mỗi chu kỳ (chế độ poll)")
     p_mon.add_argument("-c", "--cooldown", type=int, default=15, help="Thời gian làm nguội chống bão log tính theo phút (mặc định: 15)")
     p_mon.add_argument("--no-auto-block", action="store_true", help="Tắt tự động chặn IP (chuyển sang chế độ Semi-Autonomous chờ duyệt)")
     p_mon.set_defaults(func=cmd_monitor)
+
+    # Lệnh: listen (Wazuh Webhook Server)
+    p_listen = subparsers.add_parser("listen", help="Khởi chạy Webhook Receiver lắng nghe Alert từ Wazuh SIEM")
+    p_listen.add_argument("--host", default=os.getenv("WEBHOOK_HOST", "192.168.56.1"), help="Địa chỉ host lắng nghe (mặc định: 192.168.56.1)")
+    p_listen.add_argument("-p", "--port", type=int, default=int(os.getenv("WEBHOOK_PORT", "5000")), help="Cổng lắng nghe Webhook (mặc định: 5000)")
+    p_listen.add_argument("--no-auto-block", action="store_true", help="Tắt tự động chặn IP")
+    p_listen.add_argument("--test-mode", action="store_true", help="Chế độ kiểm thử (không gọi UFW thật)")
+    p_listen.set_defaults(func=cmd_listen)
+
+    # Lệnh: mock-alert (Bắn thử nghiệm Wazuh Alert JSON)
+    p_mock = subparsers.add_parser("mock-alert", help="Bắn thử nghiệm một Alert chuẩn Wazuh SIEM tới Webhook Server")
+    p_mock.add_argument("-t", "--type", choices=["bruteforce", "invalid_user", "sudo", "sudo_success", "tamper"], default="bruteforce", help="Loại tấn công mô phỏng")
+    p_mock.add_argument("--ip", default="192.168.56.102", help="IP nguồn kẻ tấn công (mặc định: 192.168.56.102)")
+    p_mock.add_argument("--user", default="root", help="Tài khoản bị nhắm tới (mặc định: root)")
+    p_mock.add_argument("--host", default=os.getenv("WEBHOOK_HOST", "127.0.0.1"), help="Host Webhook đích")
+    p_mock.add_argument("-p", "--port", type=int, default=int(os.getenv("WEBHOOK_PORT", "5000")), help="Port Webhook đích")
+    p_mock.add_argument("--token", default=None, help="Token xác thực bí mật (X-SOC-Token)")
+    p_mock.set_defaults(func=cmd_mock_alert)
 
     # Lệnh: test-email (Mới: Kiểm tra kết nối SMTP Gmail)
     p_email = subparsers.add_parser("test-email", help="Gửi email thử nghiệm kiểm tra kết nối Gmail SMTP")
@@ -400,6 +455,13 @@ def main():
     # Lệnh: test
     p_test = subparsers.add_parser("test", help="Chạy toàn bộ bộ kiểm thử trong tests/")
     p_test.set_defaults(func=cmd_test)
+
+    # Lệnh: benchmark (Đánh giá định lượng có nhãn)
+    p_bench = subparsers.add_parser("benchmark", help="Chạy đánh giá định lượng hệ thống trên tập kịch bản gán nhãn")
+    p_bench.add_argument("--mock", action="store_true", help="Chạy chế độ đánh giá mock siêu tốc không phụ thuộc Ollama")
+    p_bench.add_argument("--live", action="store_true", help="Chạy chế độ suy luận thực tế với mô hình Ollama qwen3:4b")
+    p_bench.add_argument("--limit", type=int, default=None, help="Giới hạn số kịch bản đánh giá (ví dụ: --limit 5)")
+    p_bench.set_defaults(func=cmd_benchmark)
 
     args = parser.parse_args()
     if not args.command:
