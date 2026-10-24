@@ -2,7 +2,6 @@
 
 Hệ thống tác tử an ninh mạng tự hành (**Autonomous Security Investigation & Controlled Defense Platform**) kết hợp mô hình ngôn ngữ lớn cục bộ (**Local On-Premises LLM**) với động cơ điều tra **ReAct (Reasoning + Acting)**, lớp kiểm soát an toàn xác định (**Deterministic Policy Engine Guardrails**), tích hợp **Wazuh SIEM (Tier 1)** nhả Alert qua **Event-Driven Webhook (Tier 2)**, và cơ chế phản ứng tự động trên tường lửa Linux (**UFW Defense**) cùng hệ thống báo động qua Gmail.
 
-Hệ thống thay thế cơ chế quét polling liên tục qua SSH bằng mô hình hướng sự kiện an toàn: Webhook được bảo vệ bằng **xác thực token (X-SOC-Token)**, giới hạn kết nối trong dải **Host-Only (`192.168.56.0/24`)**, xử lý sự kiện qua **hàng đợi tuần tự (FIFO Queue)** và kiểm định chặt chẽ dữ liệu đầu vào.
 
 ---
 
