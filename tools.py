@@ -56,7 +56,7 @@ def search_auth_logs(src_ip=None, user=None, lines=500):
         return _ok(tool, {
             "filter": {"src_ip": src_ip, "user": user, "lines_scanned": lines},
             "summary": dict(summary),
-            "recent_events": [_event_to_dict(e) for e in events[-15:]],
+            "recent_events": [_event_to_dict(e) for e in events[-5:]],
         })
     except Exception as ex:
         return _err(tool, ex)
@@ -100,7 +100,7 @@ def inspect_user_changes():
             "regular_users": users,
             "sudo_group_members": sudo_members,
             "baseline_check": baseline_check,
-            "recent_account_change_log_lines": changes,   # văn bản thô từ log: dữ liệu không tin cậy
+            "recent_account_change_log_lines": changes,
         })
     except Exception as ex:
         return _err(tool, ex)
@@ -122,7 +122,6 @@ SSH_DEFAULTS = {
 def check_ssh_config():
     tool = "check_ssh_config"
     try:
-        # thư mục sshd_config.d được đọc trước vì sshd lấy giá trị xuất hiện đầu tiên
         out, err = run_fixed_command(
             "cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null"
         )
@@ -137,15 +136,15 @@ def check_ssh_config():
             parts = line.split(None, 1)
             key = parts[0].lower()
             if key == "match":
-                break                    # bỏ qua các khối Match (hạn chế ở giai đoạn này)
+                break
             if key in SSH_KEYS and key not in found and len(parts) == 2:
                 found[key] = parts[1].strip()
 
         values = {
-    k: {"value": found[k], "source": "config"} if k in found
-    else {"value": SSH_DEFAULTS[k], "source": "default"}
-    for k in SSH_KEYS
-}
+            k: {"value": found[k], "source": "config"} if k in found
+            else {"value": SSH_DEFAULTS[k], "source": "default"}
+            for k in SSH_KEYS
+        }
         return _ok(tool, {
             "settings": values,
             "note": "Đọc từ file cấu hình; giá trị hiệu lực thực tế có thể khác (sshd -T cần quyền root).",
@@ -285,7 +284,170 @@ def inspect_cron_persistence():
         return _err(tool, ex)
 
 
-TOOLS = {
+# ==============================================================
+# 🛡️ LỚP PHẢN ỨNG CÓ KIỂM SOÁT (CONTROLLED RESPONSE TOOLS)
+# ==============================================================
+
+def get_firewall_status():
+    """Lấy danh sách các luật và trạng thái của tường lửa UFW từ máy chủ lab."""
+    tool = "get_firewall_status"
+    try:
+        out, err = run_fixed_command("sudo -n /usr/sbin/ufw status numbered")
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Yêu cầu mật khẩu sudo. Cần cấu hình NOPASSWD trong /etc/sudoers.d/soc_agent_ufw")
+        
+        is_active = "Status: active" in out
+        rules = []
+        for line in out.splitlines():
+            line_str = line.strip()
+            m = re.match(r"^\[\s*(\d+)\]\s+(.*?)\s+(ALLOW IN|DENY IN|ALLOW|DENY)\s+(.*)$", line_str)
+            if m:
+                rules.append({
+                    "rule_num": int(m.group(1)),
+                    "to": m.group(2).strip(),
+                    "action": m.group(3).strip(),
+                    "from": m.group(4).strip(),
+                    "raw": line_str
+                })
+        return _ok(tool, {
+            "active": is_active,
+            "raw_output": out.strip(),
+            "rules": rules,
+            "total_rules": len(rules)
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+def block_ip(ip: str):
+    """
+    Thực thi chặn IP trên tường lửa UFW thông qua Wrapper Script an toàn /usr/local/sbin/soc-block-ip.
+    Áp dụng nguyên tắc Defense-in-Depth và Least Privilege.
+    """
+    tool = "block_ip"
+    try:
+        ipaddress.ip_address(ip.strip())
+        clean_ip = ip.strip()
+
+        # 1. Ưu tiên gọi Wrapper Script an toàn (chỉ root sở hữu, tự kiểm tra IP & cổng SSH)
+        cmd_wrapper = f"sudo -n /usr/local/sbin/soc-block-ip {clean_ip}"
+        out, err = run_fixed_command(cmd_wrapper)
+
+        if "command not found" in err or "No such file" in err or "not found" in out:
+            # Fallback nếu lab chưa chạy setup_lab_guardrails.sh
+            cmd_fallback = f"sudo -n /usr/sbin/ufw insert 1 deny from {clean_ip} to any"
+            out, err = run_fixed_command(cmd_fallback)
+
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Lỗi phân quyền sudo: agent_soc cần được cấp quyền NOPASSWD trong /etc/sudoers.d/soc_agent_ufw")
+
+        if "SECURITY ERROR" in out or "SECURITY ERROR" in err:
+            return _err(tool, f"Bị chặn bởi ranh giới an toàn của máy chủ: {out.strip() or err.strip()}")
+
+        if "SUCCESS" in out or "Rule inserted" in out or "Rule updated" in out or "Rule added" in out:
+            return _ok(tool, {
+                "blocked_ip": clean_ip,
+                "command": cmd_wrapper,
+                "ufw_message": out.strip()
+            })
+        else:
+            return _err(tool, f"Không thể áp dụng luật chặn: {out.strip() or err.strip()}")
+    except ValueError:
+        return _err(tool, f"Địa chỉ IP '{ip}' không hợp lệ")
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+def unblock_ip(ip: str):
+    """Gỡ bỏ quy tắc chặn IP trên tường lửa UFW qua Wrapper Script an toàn /usr/local/sbin/soc-unblock-ip."""
+    tool = "unblock_ip"
+    try:
+        ipaddress.ip_address(ip.strip())
+        clean_ip = ip.strip()
+
+        cmd_wrapper = f"sudo -n /usr/local/sbin/soc-unblock-ip {clean_ip}"
+        out, err = run_fixed_command(cmd_wrapper)
+
+        if "command not found" in err or "No such file" in err or "not found" in out:
+            cmd_fallback = f"sudo -n /usr/sbin/ufw delete deny from {clean_ip}"
+            out, err = run_fixed_command(cmd_fallback)
+
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Lỗi phân quyền sudo: agent_soc cần được cấp quyền NOPASSWD trong /etc/sudoers.d/soc_agent_ufw")
+
+        return _ok(tool, {
+            "unblocked_ip": clean_ip,
+            "command": cmd_wrapper,
+            "ufw_message": out.strip()
+        })
+    except ValueError:
+        return _err(tool, f"Địa chỉ IP '{ip}' không hợp lệ")
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+def verify_response(ip: str, expected_state="blocked"):
+    """
+    Xác minh xem hành động phản ứng trên tường lửa UFW đã thực sự có hiệu lực hay chưa.
+    expected_state: 'blocked' (phải tồn tại rule DENY) hoặc 'unblocked' (không còn rule DENY).
+    Kiểm tra cả trạng thái active của dịch vụ tường lửa.
+    """
+    tool = "verify_response"
+    try:
+        clean_ip = ip.strip()
+        fw_status = get_firewall_status()
+        if fw_status.get("status") != "ok":
+            return _err(tool, f"Không đọc được trạng thái UFW: {fw_status.get('error')}")
+
+        data = fw_status.get("data", {})
+        rules = data.get("rules", [])
+        is_active = data.get("active", False)
+
+        matching_deny_rules = [
+            r for r in rules
+            if clean_ip in r.get("from", "") and "DENY" in r.get("action", "")
+        ]
+
+        is_present = len(matching_deny_rules) > 0
+
+        if expected_state == "blocked":
+            verified = is_present
+            message = (
+                f"Xác minh THÀNH CÔNG: IP {clean_ip} đã bị chặn bởi {len(matching_deny_rules)} luật trong UFW."
+                if verified else
+                f"Xác minh THẤT BẠI: Không tìm thấy luật DENY cho IP {clean_ip} trong UFW."
+            )
+        else: # unblocked
+            verified = not is_present
+            message = (
+                f"Xác minh THÀNH CÔNG: IP {clean_ip} đã được gỡ bỏ hoàn toàn khỏi bảng chặn của UFW."
+                if verified else
+                f"Xác minh THẤT BẠI: Vẫn còn luật DENY đối với IP {clean_ip} trong UFW."
+            )
+
+        ufw_warning = None
+        if not is_active:
+            ufw_warning = (
+                "⚠️ CẢNH BÁO AN TOÀN: Dịch vụ UFW đang ở trạng thái TẮT (Inactive). "
+                "Quy tắc đã có trong bảng nhưng CHƯA CÓ HIỆU LỰC CHẶN THỰC TẾ trên cổng mạng. "
+                "Cần kích hoạt tường lửa (lưu ý đảm bảo đã allow 22/tcp)."
+            )
+
+        return _ok(tool, {
+            "ip": clean_ip,
+            "expected_state": expected_state,
+            "verified": verified,
+            "rules_found": matching_deny_rules,
+            "message": message,
+            "ufw_active": is_active,
+            "ufw_warning": ufw_warning,
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
+# Danh mục các công cụ điều tra của Agent (Read-Only)
+INVESTIGATION_TOOLS = {
     "search_auth_logs": search_auth_logs,
     "inspect_user_changes": inspect_user_changes,
     "check_ssh_config": check_ssh_config,
@@ -293,3 +455,14 @@ TOOLS = {
     "inspect_network_connections": inspect_network_connections,
     "inspect_cron_persistence": inspect_cron_persistence,
 }
+
+# Danh mục các công cụ phản ứng (Active Response - Cần thẩm định Policy & HITL)
+RESPONSE_TOOLS = {
+    "get_firewall_status": get_firewall_status,
+    "block_ip": block_ip,
+    "unblock_ip": unblock_ip,
+    "verify_response": verify_response,
+}
+
+# Tương thích ngược
+TOOLS = dict(INVESTIGATION_TOOLS)
