@@ -7,7 +7,11 @@ Mọi trường hợp còn lại phải trả None để chuyển sang ReAct Age
 
 Chạy: python -m unittest tests/test_fast_path_bypass.py -v
 """
+import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ============================ ADAPTER ============================
 from wazuh_listener import fast_path_triage

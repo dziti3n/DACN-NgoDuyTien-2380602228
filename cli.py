@@ -41,7 +41,6 @@ from policy_engine import (
 from notifier import send_test_email, get_email_config
 from monitor_daemon import SOCMonitorDaemon
 from wazuh_listener import start_wazuh_listener
-from scripts.simulate_wazuh_alert import send_simulated_alert
 
 
 def extract_ip(text):
@@ -312,18 +311,6 @@ def cmd_listen(args):
     )
 
 
-def cmd_mock_alert(args):
-    """Bắn thử nghiệm một Alert Wazuh chuẩn JSON tới Webhook Server."""
-    send_simulated_alert(
-        alert_type=args.type,
-        src_ip=args.ip,
-        target_user=args.user,
-        host=args.host,
-        port=args.port,
-        auth_token=getattr(args, "token", None)
-    )
-
-
 def cmd_benchmark(args):
     """Chạy đánh giá định lượng hệ thống (Accuracy, FPR, Latency)."""
     from scripts.benchmark_wazuh import run_benchmark
@@ -361,24 +348,16 @@ def cmd_ui(args):
 
 
 def cmd_test(args):
-    """Chạy toàn bộ các bộ kiểm thử trong thư mục tests/."""
-    print("[*] Đang thực thi toàn bộ bài kiểm thử tự động trong tests/...\n")
-    test_files = [
-        "tests/test_fast_path_bypass.py",
-        "tests/test_wazuh_listener.py",
-        "tests/test_wazuh_integration.py",
-        "tests/test_policy_engine.py",
-        "tests/test_notifier.py",
-        "tests/test_monitor_daemon.py",
-        "tests/test_llm.py",
-        "tests/test_detection_rules.py",
-        "tests/test_tools.py",
-        "security_audit.py",
-    ]
-    for tf in test_files:
-        if os.path.exists(tf):
-            print(f"\n--- Đang chạy: {tf} ---")
-            subprocess.run([sys.executable, tf])
+    """Chạy toàn bộ các bộ kiểm thử tự động trong tests/ và kiểm toán bảo mật."""
+    print("[*] Đang thực thi toàn bộ bài kiểm thử tự động (Unit & Integration Tests)...\n")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.path.abspath(os.path.dirname(__file__))
+    subprocess.run([sys.executable, "-m", "unittest", "discover", "tests"], env=env)
+
+    print("\n" + "=" * 65)
+    print("[*] Đang thực thi kiểm toán an toàn mã nguồn (security_audit.py)...")
+    print("=" * 65)
+    subprocess.run([sys.executable, "security_audit.py"], env=env)
 
 
 def main():
@@ -405,17 +384,7 @@ def main():
     p_listen.add_argument("--test-mode", action="store_true", help="Chế độ kiểm thử (không gọi UFW thật)")
     p_listen.set_defaults(func=cmd_listen)
 
-    # Lệnh: mock-alert (Bắn thử nghiệm Wazuh Alert JSON)
-    p_mock = subparsers.add_parser("mock-alert", help="Bắn thử nghiệm một Alert chuẩn Wazuh SIEM tới Webhook Server")
-    p_mock.add_argument("-t", "--type", choices=["bruteforce", "invalid_user", "sudo", "sudo_success", "tamper"], default="bruteforce", help="Loại tấn công mô phỏng")
-    p_mock.add_argument("--ip", default="192.168.56.102", help="IP nguồn kẻ tấn công (mặc định: 192.168.56.102)")
-    p_mock.add_argument("--user", default="root", help="Tài khoản bị nhắm tới (mặc định: root)")
-    p_mock.add_argument("--host", default=os.getenv("WEBHOOK_HOST", "127.0.0.1"), help="Host Webhook đích")
-    p_mock.add_argument("-p", "--port", type=int, default=int(os.getenv("WEBHOOK_PORT", "5000")), help="Port Webhook đích")
-    p_mock.add_argument("--token", default=None, help="Token xác thực bí mật (X-SOC-Token)")
-    p_mock.set_defaults(func=cmd_mock_alert)
-
-    # Lệnh: test-email (Mới: Kiểm tra kết nối SMTP Gmail)
+    # Lệnh: test-email (Kiểm tra kết nối SMTP Gmail)
     p_email = subparsers.add_parser("test-email", help="Gửi email thử nghiệm kiểm tra kết nối Gmail SMTP")
     p_email.add_argument("--to", type=str, default=None, help="Địa chỉ email nhận thử nghiệm (mặc định: đọc từ .env)")
     p_email.set_defaults(func=cmd_test_email)

@@ -2,8 +2,13 @@
 # tests/test_wazuh_listener.py - Unit Test cho Wazuh Webhook Receiver & Parser
 # ==============================================================================
 
+import os
+import sys
 import json
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from wazuh_listener import (
     extract_ip_from_payload,
     map_wazuh_level_to_severity,

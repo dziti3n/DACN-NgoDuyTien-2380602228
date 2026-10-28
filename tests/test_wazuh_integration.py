@@ -3,6 +3,8 @@
 # Kiểm tra: Xác thực Token, Validate Schema, Phản hồi tức thời HTTP 200 và FIFO Queue
 # ==============================================================================
 
+import os
+import sys
 import json
 import time
 import unittest
@@ -10,6 +12,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from wazuh_listener import WazuhWebhookServer, WAZUH_ALERTS_FILE, DEFAULT_AUTH_TOKEN
 from scripts.simulate_wazuh_alert import send_simulated_alert

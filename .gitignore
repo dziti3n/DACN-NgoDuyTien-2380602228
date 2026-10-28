@@ -31,6 +31,7 @@ runs/*.html
 *.jpg
 *.jpeg
 screenshot*
+!docs/images/*
 
 # Bytecode và Cache
 __pycache__/
