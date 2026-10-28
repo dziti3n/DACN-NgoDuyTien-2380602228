@@ -16,18 +16,22 @@ soc_agent_key*
 *.pfx
 .streamlit/secrets.toml
 
-# Logs và Dữ liệu runtime
+# Logs và Dữ liệu runtime cục bộ
 *.log
 runs/*.json
+runs/*.jsonl
 runs/*.log
+runs/*.txt
 runs/alerts/
 runs/*.html
 !runs/.gitkeep
 
-# Dữ liệu tạm của Trình duyệt, hình ảnh & tài liệu cục bộ (KHÔNG COMMIT)
-.chrome_temp_check/
-.agents/teamwork/
+# Dữ liệu nội bộ Agent, Tests, Scratch & Tài liệu ảnh cục bộ (KHÔNG COMMIT LÊN GITHUB)
+.agents/
+tests/
+scratch/
 docs/
+.chrome_temp_check/
 *.png
 *.jpg
 *.jpeg
