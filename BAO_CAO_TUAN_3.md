@@ -217,8 +217,6 @@ Trong quá trình thử nghiệm thực tế, một sự cố nghiêm trọng đ
    - Sử dụng máy Kali Linux (`192.168.56.102`) bắn các đợt tấn công dò mật khẩu SSH (Hydra, password spraying) và đo đạc:
      - Thời gian từ lúc tấn công bắt đầu đến lúc IP bị UFW chặn đứng.
      - Tỷ lệ phát hiện đúng (True Positive Rate) và tỷ lệ báo động giả (False Positive Rate).
-4. **Viết tài liệu khóa luận:**
-   - Soạn thảo bản thảo Chương 3 (Thiết kế hệ thống) và Chương 4 (Thực nghiệm và Đánh giá kết quả) của khóa luận tốt nghiệp.
 
 ---
 *Báo cáo được lập ngày 28/10/2026 bởi sinh viên **Ngô Duy Tiến**.*
