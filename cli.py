@@ -10,8 +10,6 @@ chạy kiểm thử và khởi chạy Web Dashboard.
 
 """
 
-
-
 import argparse
 
 import json
@@ -24,15 +22,11 @@ import subprocess
 
 import sys
 
-
-
 # Đảm bảo in UTF-8 không lỗi font tiếng Việt trên PowerShell Windows
 
 if hasattr(sys.stdout, "reconfigure"):
 
     sys.stdout.reconfigure(encoding="utf-8")
-
-
 
 from telemetry.read_logs import run_fixed_command, HOST, USER
 
@@ -84,19 +78,11 @@ from integrations.monitor_daemon import SOCMonitorDaemon
 
 from integrations.wazuh_listener import start_wazuh_listener
 
-
-
-
-
 def extract_ip(text):
 
     m = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text or "")
 
     return m.group(0) if m else None
-
-
-
-
 
 def fetch_alerts(lines=1000):
 
@@ -126,10 +112,6 @@ def fetch_alerts(lines=1000):
 
         return None
 
-
-
-
-
 def cmd_scan(args):
 
     """Lệnh quét và liệt kê toàn bộ các cảnh báo an ninh."""
@@ -142,8 +124,6 @@ def cmd_scan(args):
 
         sys.exit(1)
 
-
-
     print(f"\n[+] Kết quả: Phát hiện tổng cộng {len(alerts)} cảnh báo an ninh:\n")
 
     if not alerts:
@@ -151,8 +131,6 @@ def cmd_scan(args):
         print("    ✅ Hệ thống an toàn! Không có cảnh báo bất thường.")
 
         return
-
-
 
     for i, a in enumerate(alerts):
 
@@ -172,13 +150,7 @@ def cmd_scan(args):
 
         print()
 
-
-
     print(f"💡 Gợi ý: Gõ 'python cli.py investigate <số_thứ_tự>' để Agent tự động điều tra.")
-
-
-
-
 
 def cmd_investigate(args):
 
@@ -192,15 +164,11 @@ def cmd_investigate(args):
 
         sys.exit(1)
 
-
-
     if not alerts:
 
         print("[-] Không có cảnh báo nào để điều tra.")
 
         return
-
-
 
     # Xác định chỉ số cảnh báo cần điều tra
 
@@ -216,8 +184,6 @@ def cmd_investigate(args):
 
         sys.exit(1)
 
-
-
     alert = alerts[idx]
 
     rule = alert.get("rule", "Unknown")
@@ -232,11 +198,7 @@ def cmd_investigate(args):
 
     print("=" * 65 + "\n")
 
-
-
     run = investigate(alert, verbose=not args.quiet)
-
-
 
     c = run.get("conclusion", {})
 
@@ -250,15 +212,11 @@ def cmd_investigate(args):
 
     print(f"\nTóm tắt vụ việc:\n{c.get('summary')}\n")
 
-    
-
     print("Bằng chứng đã xác thực:")
 
     for ev in c.get("evidence", []):
 
         print(f"  - ✅ {ev}")
-
-        
 
     if c.get("missing_data"):
 
@@ -268,8 +226,6 @@ def cmd_investigate(args):
 
             print(f"  - ❓ {md}")
 
-            
-
     print("\nĐề xuất xử lý (Remediation Actions):")
 
     recs = c.get("recommended_actions", [])
@@ -278,11 +234,7 @@ def cmd_investigate(args):
 
         print(f"  - 👉 {act}")
 
-
-
     print(f"\n[+] Toàn bộ nhật ký phiên điều tra đã lưu tại: {run.get('saved_to')}")
-
-
 
     # ==========================================================
 
@@ -334,8 +286,6 @@ def cmd_investigate(args):
 
                 print(f"⚠️  Hành động có mức rủi ro {decision.risk_level}. Yêu cầu xác nhận con người (HITL).")
 
-                
-
                 try:
 
                     confirm = input(f"👉 Bạn có đồng ý thực thi chặn IP '{target_ip}' ({DEFAULT_BLOCK_TTL_MINUTES} phút) trên UFW không? [y/N]: ").strip().lower()
@@ -343,8 +293,6 @@ def cmd_investigate(args):
                 except EOFError:
 
                     confirm = "n"
-
-
 
                 if confirm == "y":
 
@@ -388,10 +336,6 @@ def cmd_investigate(args):
 
                     print("[*] Đã bỏ qua hành động phản ứng.")
 
-
-
-
-
 def cmd_firewall(args):
 
     """Kiểm tra danh sách quy tắc UFW và danh sách IP đang cách ly trên lab server."""
@@ -406,15 +350,11 @@ def cmd_firewall(args):
 
         return
 
-
-
     data = res.get("data", {})
 
     print(f"\n[+] Trạng thái dịch vụ UFW: {'ACTIVE (Đang bật)' if data.get('active') else 'INACTIVE (Chưa bật)'}")
 
     print(f"[+] Tổng số quy tắc: {data.get('total_rules', 0)}\n")
-
-
 
     rules = data.get("rules", [])
 
@@ -432,8 +372,6 @@ def cmd_firewall(args):
 
             print(f"  [{r.get('rule_num')}] {r.get('action'):<10} from {r.get('from'):<20} to {r.get('to')}")
 
-
-
     # Hiển thị các IP đang cách ly có thời hạn (TTL)
 
     active_blocks = load_active_blocks()
@@ -446,10 +384,6 @@ def cmd_firewall(args):
 
             print(f"  - 🔒 {b_ip} (Hết hạn lúc: {b_info.get('expires_at')}, TTL: {b_info.get('ttl_minutes')}p)")
 
-
-
-
-
 def cmd_block(args):
 
     """Thực thi chặn IP thủ công qua Policy Engine."""
@@ -460,15 +394,11 @@ def cmd_block(args):
 
     decision = evaluate_action("block_ip", target_ip)
 
-
-
     if not decision.allowed:
 
         print(f"\n🛑 [TỪ CHỐI BẢO MẬT] {decision.reason}")
 
         sys.exit(1)
-
-
 
     print(f"\n✅ [HỢP LỆ] {decision.reason}")
 
@@ -481,8 +411,6 @@ def cmd_block(args):
             print("[*] Đã hủy thao tác.")
 
             return
-
-
 
     print(f"[*] Đang gửi lệnh cấu hình UFW tới {HOST} qua Wrapper Script...")
 
@@ -520,10 +448,6 @@ def cmd_block(args):
 
         print(f"[-] Lỗi: {exec_res.get('error')}")
 
-
-
-
-
 def cmd_unblock(args):
 
     """Gỡ bỏ quy tắc chặn IP trên UFW."""
@@ -539,8 +463,6 @@ def cmd_unblock(args):
         print(f"[-] Cú pháp IP không hợp lệ: {decision.reason}")
 
         return
-
-
 
     print(f"[*] Đang gỡ bỏ quy tắc chặn IP '{target_ip}' trên {HOST}...")
 
@@ -574,10 +496,6 @@ def cmd_unblock(args):
 
         print(f"[-] Lỗi: {exec_res.get('error')}")
 
-
-
-
-
 def cmd_monitor(args):
 
     """Khởi chạy tiến trình Giám sát An ninh Tự hành (Autonomous SOAR Daemon)."""
@@ -598,10 +516,6 @@ def cmd_monitor(args):
 
     daemon.start(mode=mode)
 
-
-
-
-
 def cmd_listen(args):
 
     """Khởi chạy Wazuh Webhook Server đón nhận Alert từ SIEM."""
@@ -620,10 +534,6 @@ def cmd_listen(args):
 
     )
 
-
-
-
-
 def cmd_benchmark(args):
 
     """Chạy đánh giá định lượng hệ thống (Accuracy, FPR, Latency)."""
@@ -633,10 +543,6 @@ def cmd_benchmark(args):
     use_mock = not getattr(args, "live", False) or getattr(args, "mock", False)
 
     run_benchmark(verbose=True, mock_mode=use_mock, limit=getattr(args, "limit", None))
-
-
-
-
 
 def cmd_test_email(args):
 
@@ -655,8 +561,6 @@ def cmd_test_email(args):
     print(f"    Người nhận:  {target or '(Chưa cấu hình)'}")
 
     print(f"    Trạng thái:  {'BẬT (Live SMTP)' if cfg.get('enabled') else 'TẮT (Chỉ lưu file preview HTML)'}\n")
-
-
 
     res = send_test_email(recipient=target)
 
@@ -680,10 +584,6 @@ def cmd_test_email(args):
 
         print(f"   Bản tin dự phòng được lưu tại: {res.get('preview_path')}")
 
-
-
-
-
 def cmd_ui(args):
 
     """Khởi chạy Giao diện Web Dashboard (Streamlit)."""
@@ -691,10 +591,6 @@ def cmd_ui(args):
     print("[*] Đang khởi chạy Giao diện Web Dashboard trên Streamlit...")
 
     subprocess.run([sys.executable, "-m", "streamlit", "run", "app.py"])
-
-
-
-
 
 def cmd_test(args):
 
@@ -708,8 +604,6 @@ def cmd_test(args):
 
     subprocess.run([sys.executable, "-m", "unittest", "discover", "tests"], env=env)
 
-
-
     print("\n" + "=" * 65)
 
     print("[*] Đang thực thi kiểm toán an toàn mã nguồn (security_audit.py)...")
@@ -718,10 +612,6 @@ def cmd_test(args):
 
     audit_path = "scripts/security_audit.py" if os.path.exists("scripts/security_audit.py") else "security_audit.py"
     subprocess.run([sys.executable, audit_path], env=env)
-
-
-
-
 
 def main():
 
@@ -734,8 +624,6 @@ def main():
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Lệnh chức năng")
-
-
 
     # Lệnh: monitor (Autonomous SOAR Daemon)
 
@@ -753,8 +641,6 @@ def main():
 
     p_mon.set_defaults(func=cmd_monitor)
 
-
-
     # Lệnh: listen (Wazuh Webhook Server)
 
     p_listen = subparsers.add_parser("listen", help="Khởi chạy Webhook Receiver lắng nghe Alert từ Wazuh SIEM")
@@ -769,8 +655,6 @@ def main():
 
     p_listen.set_defaults(func=cmd_listen)
 
-
-
     # Lệnh: test-email (Kiểm tra kết nối SMTP Gmail)
 
     p_email = subparsers.add_parser("test-email", help="Gửi email thử nghiệm kiểm tra kết nối Gmail SMTP")
@@ -778,8 +662,6 @@ def main():
     p_email.add_argument("--to", type=str, default=None, help="Địa chỉ email nhận thử nghiệm (mặc định: đọc từ .env)")
 
     p_email.set_defaults(func=cmd_test_email)
-
-
 
     # Lệnh: scan
 
@@ -790,8 +672,6 @@ def main():
     p_scan.add_argument("-v", "--verbose", action="store_true", help="Hiển thị chi tiết JSON từng cảnh báo")
 
     p_scan.set_defaults(func=cmd_scan)
-
-
 
     # Lệnh: investigate
 
@@ -805,15 +685,11 @@ def main():
 
     p_inv.set_defaults(func=cmd_investigate)
 
-
-
     # Lệnh: firewall
 
     p_fw = subparsers.add_parser("firewall", help="Xem trạng thái và các quy tắc tường lửa UFW")
 
     p_fw.set_defaults(func=cmd_firewall)
-
-
 
     # Lệnh: block
 
@@ -825,8 +701,6 @@ def main():
 
     p_block.set_defaults(func=cmd_block)
 
-
-
     # Lệnh: unblock
 
     p_unblock = subparsers.add_parser("unblock", help="Gỡ chặn một IP trên UFW")
@@ -835,23 +709,17 @@ def main():
 
     p_unblock.set_defaults(func=cmd_unblock)
 
-
-
     # Lệnh: ui
 
     p_ui = subparsers.add_parser("ui", help="Mở giao diện Web Dashboard (Streamlit UI)")
 
     p_ui.set_defaults(func=cmd_ui)
 
-
-
     # Lệnh: test
 
     p_test = subparsers.add_parser("test", help="Chạy toàn bộ bộ kiểm thử trong tests/")
 
     p_test.set_defaults(func=cmd_test)
-
-
 
     # Lệnh: benchmark (Đánh giá định lượng có nhãn)
 
@@ -865,8 +733,6 @@ def main():
 
     p_bench.set_defaults(func=cmd_benchmark)
 
-
-
     args = parser.parse_args()
 
     if not args.command:
@@ -875,13 +741,7 @@ def main():
 
         sys.exit(0)
 
-
-
     args.func(args)
-
-
-
-
 
 if __name__ == "__main__":
 

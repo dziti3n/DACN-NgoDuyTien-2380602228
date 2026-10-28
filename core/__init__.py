@@ -35,3 +35,4 @@ __all__ = [
     "get_expired_blocks",
     "DEFAULT_BLOCK_TTL_MINUTES",
 ]
+

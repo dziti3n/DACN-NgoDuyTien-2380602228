@@ -41,3 +41,4 @@ __all__ = [
     "send_test_email",
     "get_email_config",
 ]
+
