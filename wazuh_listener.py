@@ -598,6 +598,20 @@ class WazuhWebhookManager:
 
         self.total_alerts_received += 1
 
+        # 0. Chống vòng lặp tự kích hoạt (SOAR Self-Triggering Loop Prevention):
+        # Khi Agent (agent_soc) chạy lệnh kiểm tra UFW hoặc các script wrapper phản ứng,
+        # Wazuh sẽ ghi nhận Rule 5401/5402/5404. Cần bỏ qua tất cả hành động nội bộ của chính SOAR.
+        acting_user = (
+            alert.get("src_user")
+            or alert.get("user")
+            or alert.get("wazuh", {}).get("srcuser")
+            or alert.get("details", {}).get("srcuser")
+            or ""
+        )
+        if acting_user == "agent_soc":
+            print(f"🔄 [SOAR INTERNAL TELEMETRY] Bỏ qua sự kiện nội bộ từ 'agent_soc' (Rule {rule_id}) để chống vòng lặp.")
+            return {"status": "skipped", "reason": "agent_soc internal telemetry loop prevention"}
+
         # 1. Thử nghiệm Fast-Path Triage xác định (Tier 1.5 - <1ms)
         fast_conclusion = fast_path_triage(alert)
         if fast_conclusion:
@@ -718,20 +732,30 @@ class WazuhWebhookManager:
                 print(f"🛑 [BỊ TỪ CHỐI BẢO MẬT] Không thể chặn IP {src_ip}: {decision.reason}")
 
         # 3. Soạn và Gửi Email Báo động Cảnh báo
-        print(f"\n📧 [THÔNG BÁO] Đang xử lý email báo cáo sự cố...")
-        subject = f"🚨 [WAZUH SOC ALERT] {rule_desc} từ {src_ip or 'Hệ thống'} (Cấp độ: {rule_level})"
-        html_body = build_alert_html(alert, run, response_info)
-        plain_text = f"Cảnh báo Wazuh {rule_desc} từ IP {src_ip}. Verdict: {verdict}. Xem file HTML đính kèm để biết chi tiết."
+        # CHỈ gửi email khi có mối đe dọa thực sự (malicious / suspicious) hoặc khi có hành động chặn IP
+        should_send_email = (
+            verdict in ("malicious_activity_likely", "suspicious_needs_more_data")
+            or response_info.get("action") == "block_ip"
+            or rule_level >= 7
+        ) and not run.get("conclusion", {}).get("fast_path")
 
-        email_res = send_alert_email(subject, html_body, plain_text)
-        if email_res.get("status") == "sent":
-            self.total_emails_sent += 1
-            print(f"✅ [EMAIL SENT] Đã gửi thư cảnh báo thành công tới: {email_res.get('recipient')}")
-        elif email_res.get("status") == "skipped":
-            print(f"ℹ️ [EMAIL SKIPPED] {email_res.get('reason')}")
-            print(f"   Bản tin HTML đã được lưu tại: {email_res.get('preview_path')}")
+        if should_send_email:
+            print(f"\n📧 [THÔNG BÁO] Đang xử lý email báo cáo sự cố...")
+            subject = f"🚨 [WAZUH SOC ALERT] {rule_desc} từ {src_ip or 'Hệ thống'} (Cấp độ: {rule_level})"
+            html_body = build_alert_html(alert, run, response_info)
+            plain_text = f"Cảnh báo Wazuh {rule_desc} từ IP {src_ip}. Verdict: {verdict}. Xem file HTML đính kèm để biết chi tiết."
+
+            email_res = send_alert_email(subject, html_body, plain_text)
+            if email_res.get("status") == "sent":
+                self.total_emails_sent += 1
+                print(f"✅ [EMAIL SENT] Đã gửi thư cảnh báo thành công tới: {email_res.get('recipient')}")
+            elif email_res.get("status") == "skipped":
+                print(f"ℹ️ [EMAIL SKIPPED] {email_res.get('reason')}")
+                print(f"   Bản tin HTML đã được lưu tại: {email_res.get('preview_path')}")
+            else:
+                print(f"⚠️ [EMAIL ERROR] {email_res.get('error')}")
         else:
-            print(f"⚠️ [EMAIL ERROR] {email_res.get('error')}")
+            print(f"\nℹ️ [EMAIL SKIPPED] Bỏ qua gửi email cho sự kiện bình thường / cấp độ thấp (Verdict: {verdict}, Rule Level: {rule_level}).")
 
         print("-" * 75 + "\n")
         self._save_state()

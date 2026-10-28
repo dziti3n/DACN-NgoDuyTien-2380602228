@@ -24,9 +24,10 @@ runs/alerts/
 runs/*.html
 !runs/.gitkeep
 
-# Dữ liệu tạm của Trình duyệt & Teamwork Subagents (KHÔNG COMMIT)
+# Dữ liệu tạm của Trình duyệt, hình ảnh & tài liệu cục bộ (KHÔNG COMMIT)
 .chrome_temp_check/
 .agents/teamwork/
+docs/
 *.png
 *.jpg
 *.jpeg
