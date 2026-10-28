@@ -20,20 +20,36 @@ if hasattr(sys.stdout, "reconfigure"):
 
 load_dotenv()
 
-from read_logs import run_fixed_command, HOST
-from log_parser import parse_log
-from detection import detect_all, alert_to_dict
-from agent import investigate
-from tools import block_ip, unblock_ip, verify_response
-from policy_engine import (
-    evaluate_action,
-    record_audit_log,
-    save_active_block,
-    remove_active_block,
-    load_active_blocks,
-    DEFAULT_BLOCK_TTL_MINUTES,
-)
-from notifier import build_alert_html, send_alert_email
+try:
+    from telemetry.read_logs import run_fixed_command, HOST
+    from telemetry.log_parser import parse_log
+    from telemetry.detection import detect_all, alert_to_dict
+    from core.agent import investigate
+    from telemetry.tools import block_ip, unblock_ip, verify_response
+    from core.policy_engine import (
+        evaluate_action,
+        record_audit_log,
+        save_active_block,
+        remove_active_block,
+        load_active_blocks,
+        DEFAULT_BLOCK_TTL_MINUTES,
+    )
+    from integrations.notifier import build_alert_html, send_alert_email
+except ImportError:
+    from read_logs import run_fixed_command, HOST
+    from log_parser import parse_log
+    from detection import detect_all, alert_to_dict
+    from agent import investigate
+    from tools import block_ip, unblock_ip, verify_response
+    from policy_engine import (
+        evaluate_action,
+        record_audit_log,
+        save_active_block,
+        remove_active_block,
+        load_active_blocks,
+        DEFAULT_BLOCK_TTL_MINUTES,
+    )
+    from notifier import build_alert_html, send_alert_email
 
 STATE_FILE = Path("runs/monitor_state.json")
 RUNS_DIR = Path("runs")
@@ -338,7 +354,10 @@ class SOCMonitorDaemon:
         """Khởi động Daemon theo chế độ Event-Driven (Wazuh Webhook) hoặc Legacy Polling."""
         active_mode = mode or self.mode
         if active_mode in ("event-driven", "webhook", "wazuh"):
-            from wazuh_listener import start_wazuh_listener
+            try:
+                from integrations.wazuh_listener import start_wazuh_listener
+            except ImportError:
+                from wazuh_listener import start_wazuh_listener
             webhook_port = int(os.getenv("WEBHOOK_PORT", "5000"))
             webhook_host = os.getenv("WEBHOOK_HOST", "0.0.0.0")
             print("\n" + "=" * 75)

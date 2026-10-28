@@ -4,8 +4,12 @@ import json
 import os
 from collections import Counter
 
-from read_logs import run_fixed_command
-from log_parser import parse_log
+try:
+    from telemetry.read_logs import run_fixed_command
+    from telemetry.log_parser import parse_log
+except ImportError:
+    from read_logs import run_fixed_command
+    from log_parser import parse_log
 
 USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 IGNORED_USERS = {"agent_soc"}
@@ -86,8 +90,9 @@ def inspect_user_changes():
         changes = [l[:300] for l in log_out.splitlines()][-20:]
 
         baseline_check = {"status": "no_baseline_file"}
-        if os.path.exists("baseline.json"):
-            with open("baseline.json", encoding="utf-8") as f:
+        b_path = "config/baseline.json" if os.path.exists("config/baseline.json") else "baseline.json"
+        if os.path.exists(b_path):
+            with open(b_path, encoding="utf-8") as f:
                 b = json.load(f)
             names = {u["name"] for u in users}
             baseline_check = {

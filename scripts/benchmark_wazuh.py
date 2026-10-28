@@ -27,9 +27,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from wazuh_listener import normalize_wazuh_alert, fast_path_triage
-from agent import investigate
-from policy_engine import evaluate_action, is_protected_ip
+from integrations.wazuh_listener import normalize_wazuh_alert, fast_path_triage
+from core.agent import investigate
+from core.policy_engine import evaluate_action, is_protected_ip
 import tools
 import read_logs
 import agent

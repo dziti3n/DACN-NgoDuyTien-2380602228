@@ -24,18 +24,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent import investigate
-from tools import block_ip, unblock_ip, verify_response
-from policy_engine import (
-    evaluate_action,
-    record_audit_log,
-    save_active_block,
-    remove_active_block,
-    load_active_blocks,
-    DEFAULT_BLOCK_TTL_MINUTES,
-    PolicyDecision,
-)
-from notifier import build_alert_html, send_alert_email
+try:
+    from core.agent import investigate
+    from telemetry.tools import block_ip, unblock_ip, verify_response
+    from core.policy_engine import (
+        evaluate_action,
+        record_audit_log,
+        save_active_block,
+        remove_active_block,
+        load_active_blocks,
+        DEFAULT_BLOCK_TTL_MINUTES,
+        PolicyDecision,
+    )
+    from integrations.notifier import build_alert_html, send_alert_email
+except ImportError:
+    from agent import investigate
+    from tools import block_ip, unblock_ip, verify_response
+    from policy_engine import (
+        evaluate_action,
+        record_audit_log,
+        save_active_block,
+        remove_active_block,
+        load_active_blocks,
+        DEFAULT_BLOCK_TTL_MINUTES,
+        PolicyDecision,
+    )
+    from notifier import build_alert_html, send_alert_email
 
 RUNS_DIR = Path("runs")
 WAZUH_ALERTS_FILE = RUNS_DIR / "wazuh_alerts.jsonl"

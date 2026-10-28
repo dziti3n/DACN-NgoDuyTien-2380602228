@@ -3,8 +3,12 @@ import os
 import time
 from datetime import datetime
 
-from llm_client import get_llm_client, LLMError
-from tools import TOOLS
+try:
+    from core.llm_client import get_llm_client, LLMError
+    from telemetry.tools import TOOLS
+except ImportError:
+    from llm_client import get_llm_client, LLMError
+    from tools import TOOLS
 
 # Tối ưu hóa hiệu năng: 1 bước gọi tool đặc định là đủ bằng chứng để Agent kết luận ngay trong <10s
 MAX_STEPS = int(os.getenv("MAX_INVESTIGATION_STEPS", "1"))
