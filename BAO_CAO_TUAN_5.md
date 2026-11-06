@@ -40,7 +40,7 @@ Hệ thống hoạt động tự động theo quy trình 5 bước:
 - **Kiến trúc Zero-Trust:** Bỏ hoàn toàn việc SSH vào đọc file log thô; Agent nhận 100% dữ liệu từ Wazuh SIEM qua Webhook.
 - **Thực nghiệm tấn công thực tế:** Kết nối thành công máy ảo Kali Linux (`192.168.56.10`) tấn công máy chủ Ubuntu (`192.168.56.101`).
 - **Tự động phản ứng & Ngăn chặn:** Tường lửa UFW tự động chặn IP Kali khi Wazuh phát hiện Brute Force.
-- **Gửi cảnh báo qua Gmail:** Đã cấu hình gửi mail báo cáo sự cố thành công về `duytien0125@gmail.com`.
+- **Gửi cảnh báo qua Gmail:** Đã cấu hình gửi mail báo cáo sự cố thành công về gmail.com.
 - **Kiểm thử tự động:** Vượt qua toàn bộ **59/59 bài test (100% PASS)** và **11/11 luật phát hiện an ninh**.
 
 ---
