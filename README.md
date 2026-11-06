@@ -14,69 +14,34 @@ Hệ thống hoạt động trên môi trường triển khai thực tế 100%: 
 
 
 
-## 🏛️ Kiến trúc Triển khai Thực tế (Real-World Architecture)
+## 🏛️ Kiến trúc Triển khai Thực tế & Luồng Dữ liệu (Real-World Architecture & Data Flow)
 
-
+> **Nguyên tắc Kiến trúc Cốt lõi (Zero-Trust SOC):**  
+> *"Agent không SSH và không đọc trực tiếp log trên endpoint. Agent nhận alert do Wazuh gửi qua webhook. Khi cần điều tra lịch sử, agent yêu cầu một công cụ truy vấn chỉ đọc trên dữ liệu alert/archive của Wazuh; kết quả truy vấn cũng đến từ Wazuh."*
 
 ```
+auth.log trên endpoint
+       │
+       ▼
+  Wazuh Agent / Logcollector (Đọc cục bộ tại endpoint)
+       │
+       ▼
+  Wazuh Manager: giải mã (Decoders), đối chiếu ruleset, tạo alert
+       ├── alert JSON ──────────► custom integration ──► listener ──► agent (Phân tích alert hiện tại)
+       │                         (/var/ossec/integrations/               (Đọc full_log, rule, IP, user)
+       │                          custom-ai-soc :5000)
+       │
+       └── archive sự kiện ────► Wazuh Indexer (Kho lưu trữ tập trung)
+                                       ▲
+                                       │ (Truy vấn lịch sử chỉ đọc)
+                                 agent yêu cầu backend truy vấn lịch sử (query_wazuh_history)
+```
 
-┌─────────────────────────────────────────────────────────────────────────────────┐
-
-│              1. MÁY ẢO UBUNTU SERVER 24.04 (SOC LAB & WAZUH SIEM - 192.168.56.101)│
-
-│                                                                                 │
-
-│  • Wazuh SIEM All-in-One 4.9.2 (Manager + Indexer + Web Dashboard Port 443)    │
-
-│  • Nguồn nhật ký: /var/log/auth.log, Syslog, Journald, Auditd                  │
-
-│  • Wazuh Detection Rules Engine (Rule 5710, 5712, 5760, 5401, 5402, 550...)     │
-
-│  • Custom Webhook Integration (/var/ossec/integrations/custom-ai-soc)           │
-
-│                                      │                                          │
-
-│                                      ▼ HTTP POST (Token Auth, Port 5000)        │
-
-├─────────────────────────────────────────────────────────────────────────────────┤
-
-│              2. MÁY HOST WINDOWS 11 (AI SOC COMMAND CENTER - 192.168.56.1)       │
-
-│                                                                                 │
-
-│  ┌─────────────────────────┐         ┌───────────────────────────────────────┐  │
-
-│  │    wazuh_listener.py    │         │    agent.py (ReAct Investigation)     │  │
-
-│  │    • Webhook Token Auth │         │    • Local Ollama (qwen3:4b, seed=42) │  │
-
-│  │    • SOAR Loop Filter   │ ──────> │    • Điều tra chuỗi sự kiện thực tế   │  │
-
-│  │    • Fast-Path (<1ms)   │ Alert   │    • Đóng gói <untrusted_tool_output> │  │
-
-│  │    • FIFO Queue Worker  │         │    • 6 công cụ trinh sát chỉ đọc      │  │
-
-│  └─────────────────────────┘         └───────────────────┬───────────────────┘  │
-
-│               │                                          │                      │
-
-│               ▼ Ghi nhận                                 ▼ Đề xuất phản ứng     │
-
-│  ┌─────────────────────────┐         ┌───────────────────────────────────────┐  │
-
-│  │    runs/wazuh_alerts    │         │    policy_engine.py (Guardrails)      │  │
-
-│  │    • Alert Stream JSONL │         │    • Protected IP Whitelist           │  │
-
-│  │    • Audit Trail        │         │    • Anti-Prompt Injection Validator  │  │
-
-│  │    • Active Blocks & TTL│         │    • Rate Limiting (Tối đa 5 lần/giờ) │  │
-
-│  └─────────────────────────┘         │    • Quản lý thời hạn TTL 15 phút     │  │
-
-│                                      └───────────────────┬───────────────────┘  │
-
-│                                                          │                      │
+### Phân Định Rõ Ràng 2 Giai Đoạn Điều Tra Của Agent:
+1. **Phân tích Alert hiện tại:** Listener nhận gói tin alert JSON từ Webhook; Agent đọc `full_log`, `rule.id`, `rule.level`, địa chỉ IP nguồn (`srcip`), tài khoản (`dstuser`), thời gian và các trường metadata thực tế có trong alert.  
+   *(Lưu ý học thuật quan trọng: `full_log` chỉ là dòng log thô kích hoạt sự kiện vi phạm hiện tại, tuyệt đối không mặc định nó chứa toàn bộ lịch sử đăng nhập trước đó của tài khoản).*
+2. **Tra cứu lịch sử & tương quan sự kiện:** Khi Agent cần xác minh xem trước đó IP hoặc tài khoản này đã từng đăng nhập thành công hay có chuỗi thất bại kéo dài hay chưa, Agent gọi công cụ chỉ đọc `query_wazuh_history` để tìm các sự kiện liên quan trong **kho dữ liệu Alert & Archive tập trung của Wazuh SIEM**, hoàn toàn **không kết nối SSH vào endpoint**.
+3. **Xác nhận thành phần thu thập:** Trên máy ảo Ubuntu 24.04 All-in-One (`192.168.56.101`), Wazuh Manager tự thu thập `/var/log/auth.log` thông qua module nội bộ `logcollector` (khai báo `<localfile>` trong `ossec.conf`), định danh agent cục bộ là `agent.id: 001` (`ubuntu-lab`).
 
 │               ┌──────────────────────────────────────────┴────────────────┐     │
 

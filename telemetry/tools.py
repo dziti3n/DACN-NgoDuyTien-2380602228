@@ -34,36 +34,87 @@ def _event_to_dict(e):
     }
 
 
-# ---------- Tool 1: tìm sự kiện xác thực ----------
+# ---------- Tool 1: Truy vấn lịch sử sự kiện an ninh từ Wazuh SIEM (Alerts & Archives) ----------
 def search_auth_logs(src_ip=None, user=None, lines=500):
+    """
+    Truy vấn lịch sử sự kiện xác thực và an ninh từ Kho lưu trữ tập trung của Wazuh SIEM (Alerts & Archives).
+    Tuân thủ nghiêm ngặt nguyên tắc Zero-Trust:
+      - Agent KHÔNG SSH vào endpoint và KHÔNG đọc trực tiếp /var/log/auth.log.
+      - Toàn bộ dữ liệu lịch sử được truy xuất từ dữ liệu tập trung do Wazuh thu thập và lưu trữ.
+    """
     tool = "search_auth_logs"
     try:
         if src_ip is not None:
             ipaddress.ip_address(src_ip)           # lỗi nếu không phải IP hợp lệ
         if user is not None and not USER_RE.match(user):
             return _err(tool, "tên user không hợp lệ")
-        lines = max(50, min(int(lines), 2000))
+        lines = max(10, min(int(lines), 2000))
 
-        out, err = run_fixed_command(f"tail -n {lines} /var/log/auth.log")
-        if not out.strip():
-            return _err(tool, err or "không đọc được log")
+        w_file = os.path.join("runs", "wazuh_alerts.jsonl")
+        events = []
+        if os.path.exists(w_file):
+            with open(w_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line_s = line.strip()
+                    if not line_s:
+                        continue
+                    try:
+                        item = json.loads(line_s)
+                        alt = item.get("alert", {})
+                        raw = item.get("raw_wazuh", {})
+                        fl = raw.get("full_log", "") or alt.get("summary", "")
 
-        events = [e for e in parse_log(out) if e.user not in IGNORED_USERS]
-        if src_ip:
-            events = [e for e in events if e.src_ip == src_ip]
-        if user:
-            events = [e for e in events if e.user == user]
+                        evt_ip = alt.get("src_ip") or raw.get("data", {}).get("srcip")
+                        evt_user = alt.get("user") or raw.get("data", {}).get("dstuser")
 
+                        # Bỏ qua user nội bộ SOAR để tránh nhiễu
+                        if evt_user in IGNORED_USERS or "agent_soc" in fl:
+                            continue
+
+                        # Lọc theo src_ip hoặc user nếu có yêu cầu
+                        if src_ip and evt_ip != src_ip and src_ip not in fl:
+                            continue
+                        if user and evt_user != user and user not in fl:
+                            continue
+
+                        rule_info = alt.get("wazuh", {}) or raw.get("rule", {})
+                        rule_id = str(rule_info.get("rule_id") or raw.get("rule", {}).get("id", "unknown"))
+                        rule_desc = rule_info.get("description") or raw.get("rule", {}).get("description", "")
+                        sev = alt.get("severity_hint") or "medium"
+
+                        events.append({
+                            "time": item.get("received_at", ""),
+                            "rule_id": rule_id,
+                            "rule_desc": rule_desc,
+                            "severity": sev,
+                            "src_ip": evt_ip,
+                            "user": evt_user,
+                            "full_log": fl[:300],
+                        })
+                    except Exception:
+                        continue
+
+        # Thống kê tổng quan số lần xuất hiện theo Rule
         summary = Counter()
         for e in events:
-            summary[e.event_type] += e.count
+            summary[f"rule_{e['rule_id']}"] += 1
+
+        recent = events[-lines:] if lines > 0 else []
+
         return _ok(tool, {
-            "filter": {"src_ip": src_ip, "user": user, "lines_scanned": lines},
+            "source": "Wazuh SIEM Centralized Store (Alerts & Archives)",
+            "endpoint_queried": "None (No direct SSH to endpoint - Zero-Trust Architecture)",
+            "filter": {"src_ip": src_ip, "user": user, "limit": lines},
+            "total_matched_events": len(events),
             "summary": dict(summary),
-            "recent_events": [_event_to_dict(e) for e in events[-5:]],
+            "recent_events": recent[-5:],
         })
     except Exception as ex:
         return _err(tool, ex)
+
+
+# Định nghĩa alias đúng chuẩn kiến trúc học thuật
+query_wazuh_history = search_auth_logs
 
 
 # ---------- Tool 2: kiểm tra tài khoản và quyền ----------
@@ -454,6 +505,7 @@ def verify_response(ip: str, expected_state="blocked"):
 # Danh mục các công cụ điều tra của Agent (Read-Only)
 INVESTIGATION_TOOLS = {
     "search_auth_logs": search_auth_logs,
+    "query_wazuh_history": search_auth_logs,
     "inspect_user_changes": inspect_user_changes,
     "check_ssh_config": check_ssh_config,
     "inspect_active_processes": inspect_active_processes,

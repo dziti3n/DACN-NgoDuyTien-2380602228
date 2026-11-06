@@ -86,15 +86,32 @@ def extract_ip_from_text(text: str):
     return m.group(0) if m else None
 
 
-def fetch_live_logs(lines: int = 100):
-    """Đọc auth.log từ máy chủ lab qua kết nối SSH."""
+def load_wazuh_siem_events(max_lines: int = 100):
+    """
+    Truy xuất nhật ký và cảnh báo an ninh từ Kho dữ liệu tập trung Wazuh SIEM.
+    Tuân thủ nguyên tắc Zero-Trust: 100% dữ liệu từ Wazuh SIEM, Agent không SSH vào endpoint.
+    """
+    w_file = Path("runs", "wazuh_alerts.jsonl")
+    if not w_file.exists():
+        return [], []
+    recent_alerts = []
+    loaded_lines = []
     try:
-        out, err = run_fixed_command(f"tail -n {lines} /var/log/auth.log")
-        if out and out.strip():
-            return out, None
-        return "", err or "Không có nội dung log trả về"
-    except Exception as ex:
-        return "", str(ex)
+        with open(w_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line_s = line.strip()
+                if line_s:
+                    item = json.loads(line_s)
+                    alt = item.get("alert")
+                    if alt:
+                        recent_alerts.append(alt)
+                    raw_w = item.get("raw_wazuh", {})
+                    fl = raw_w.get("full_log") or (alt.get("summary") if alt else None) or raw_w.get("rule", {}).get("description")
+                    if fl:
+                        loaded_lines.append(fl)
+    except Exception:
+        pass
+    return list(reversed(recent_alerts[-25:])), loaded_lines[-max_lines:]
 
 
 
@@ -275,9 +292,9 @@ def render_cyber_terminal_fragment():
     raw_content = st.session_state.get("raw_logs", "")
     if not raw_content:
         raw_content = (
-            "[HỆ THỐNG AI SOC - TRỰC CHIẾN THỜI GIAN THỰC (0s DELAY)]\n"
+            "[HỆ THỐNG AI SOC - TRỰC CHIẾN THỜI GIAN THỰC (WAZUH SIEM)]\n"
             "Trực chiến Webhook tại cổng 5000: Sẵn sàng nhận cảnh báo tức thời từ Wazuh SIEM...\n"
-            "Bấm '🔄 Quét Log Thật (SSH)' để nạp snapshot auth.log mới nhất từ máy chủ lab."
+            "Mọi sự kiện được thu thập và quản lý tập trung qua Wazuh Manager (Zero-Trust • Không SSH vào endpoint)."
         )
 
     all_lines = [l for l in raw_content.splitlines() if l.strip()]
@@ -294,11 +311,11 @@ def render_cyber_terminal_fragment():
         '<span style="display:inline-block; width:10px; height:10px; background:#ef4444; border-radius:50%; margin-right:5px; box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);"></span>'
         '<span style="display:inline-block; width:10px; height:10px; background:#f59e0b; border-radius:50%; margin-right:5px; box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);"></span>'
         '<span style="display:inline-block; width:10px; height:10px; background:#10b981; border-radius:50%; margin-right:8px; box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);"></span>'
-        f'<span style="color: #38bdf8; font-size: 11.5px; font-weight: 700; letter-spacing: 0.5px;">bash - /var/log/auth.log [{USER}@{HOST}]</span>'
+        f'<span style="color: #38bdf8; font-size: 11.5px; font-weight: 700; letter-spacing: 0.5px;">Wazuh SIEM Centralized Telemetry [{HOST}]</span>'
         '</div>'
         '<div style="display: flex; align-items: center; color: #38bdf8; font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px;">'
         '<span style="display:inline-block; width:7px; height:7px; background:#10b981; border-radius:50%; margin-right:5px; box-shadow: 0 0 8px #10b981;"></span>'
-        '⚡ REAL-TIME • TỨC THỜI (0s DELAY)'
+        '⚡ REAL-TIME • EVENT-DRIVEN SIEM'
         '</div>'
         '</div>'
         '<div style="height: 400px; max-height: 400px; overflow-y: auto; padding: 10px 12px; color: #cbd5e1; '
@@ -307,8 +324,8 @@ def render_cyber_terminal_fragment():
         '</div>'
         '<div style="background: #0b0f19; padding: 4px 12px; border-top: 1px solid rgba(56, 189, 248, 0.15); '
         'font-size: 10.5px; color: #64748b; display: flex; justify-content: space-between;">'
-        f'<span><strong style="color:#94a3b8;">{len(all_lines)}</strong> dòng log | Cập nhật: <strong style="color:#38bdf8;">{fetch_time_str}</strong> (Tức thời • Event-Driven)</span>'
-        f'<span style="color:#a78bfa;">SSH: {HOST}:22 (Read-Only)</span>'
+        f'<span><strong style="color:#94a3b8;">{len(all_lines)}</strong> dòng sự kiện | Cập nhật: <strong style="color:#38bdf8;">{fetch_time_str}</strong> (Webhook Port 5000)</span>'
+        f'<span style="color:#a78bfa;">Wazuh SIEM: {HOST}:5000 (Zero-Trust Centralized)</span>'
         '</div>'
         '</div>'
     )
@@ -629,55 +646,31 @@ def main():
                 st.session_state["was_stopped"] = True
                 st.rerun()
         else:
-            # 3 nút tác chiến thực tế (Real Operations)
+            # 3 nút tác chiến thực tế (Wazuh SIEM Centralized Operations)
             b_col1, b_col2, b_col3 = st.columns([1.1, 1.1, 1.0])
             with b_col1:
-                if st.button("🔄 Quét Log Thật (SSH)", use_container_width=True, key="btn_scan_single", help="Đọc trực tiếp auth.log từ máy Ubuntu qua kết nối SSH an toàn"):
-                    st.session_state["sim_injected"] = False
-                    with st.spinner("Đang kết nối SSH tới server lab..."):
-                        lines_count = st.session_state.get("lines_to_read", 100)
-                        log_data, err = fetch_live_logs(lines=lines_count)
-                        if log_data:
-                            st.session_state["raw_logs"] = log_data
-                            st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
-                            try:
-                                events = parse_log(log_data)
-                                st.session_state["alerts"] = [alert_to_dict(a) for a in detect_all(events, baseline_path="config/baseline.json")]
-                            except Exception:
-                                pass
-                        elif err:
-                            st.error(f"Lỗi SSH: {err}")
+                if st.button("📡 Đồng Bộ Alert Wazuh", use_container_width=True, key="btn_sync_wazuh", help="Nạp các cảnh báo an ninh thực tế mới nhất nhận từ Webhook Wazuh SIEM"):
+                    recent_alerts, loaded_lines = load_wazuh_siem_events(max_lines=st.session_state.get("lines_to_read", 100))
+                    if recent_alerts:
+                        st.session_state["alerts"] = recent_alerts
+                    if loaded_lines:
+                        st.session_state["raw_logs"] = "\n".join(loaded_lines)
+                        st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
+                    st.toast(f"Đã đồng bộ {len(recent_alerts)} cảnh báo từ Wazuh SIEM!")
                     st.rerun()
             with b_col2:
-                if st.button("📡 Đồng Bộ Wazuh SIEM", use_container_width=True, key="btn_sync_wazuh", help="Nạp các cảnh báo an ninh thực tế mới nhất nhận từ Webhook Wazuh SIEM"):
-                    try:
-                        w_file = os.path.join("runs", "wazuh_alerts.jsonl")
-                        if os.path.exists(w_file):
-                            recent_alerts = []
-                            loaded_lines = []
-                            with open(w_file, "r", encoding="utf-8") as f:
-                                for line in f:
-                                    if line.strip():
-                                        item = json.loads(line)
-                                        alt = item.get("alert")
-                                        if alt:
-                                            recent_alerts.append(alt)
-                                        raw_w = item.get("raw_wazuh", {})
-                                        fl = raw_w.get("full_log") or (alt.get("summary") if alt else None) or raw_w.get("rule", {}).get("description")
-                                        if fl:
-                                            loaded_lines.append(fl)
-                            if recent_alerts:
-                                st.session_state["alerts"] = list(reversed(recent_alerts[-25:]))
-                            if loaded_lines:
-                                st.session_state["raw_logs"] = "\n".join(loaded_lines[-100:])
-                                st.session_state["log_fetch_time"] = datetime.now().strftime("%H:%M:%S")
-                            st.toast(f"Đã đồng bộ {len(recent_alerts)} cảnh báo từ Wazuh SIEM!")
-                    except Exception as ex:
-                        st.error(f"Lỗi nạp Wazuh: {ex}")
+                if st.button("🔍 Tra Cứu Lịch Sử SIEM", use_container_width=True, key="btn_query_wazuh_history", help="Truy vấn dữ liệu lịch sử sự kiện từ kho lưu trữ tập trung của Wazuh SIEM"):
+                    hist_res = search_auth_logs(lines=st.session_state.get("lines_to_read", 100))
+                    if hist_res.get("status") == "ok":
+                        d_info = hist_res.get("data", {})
+                        total = d_info.get("total_matched_events", 0)
+                        st.toast(f"Kho Wazuh SIEM: Tìm thấy {total} sự kiện xác thực!")
                     st.rerun()
             with b_col3:
                 if st.button("⚡ Giám Sát Tự Hành", use_container_width=True, key="btn_start_continuous", help="Bật chế độ tự động giám sát và dọn dẹp TTL"):
                     st.session_state["continuous_scan"] = True
+                    st.session_state["system_status"] = "scanning"
+                    st.rerun()
                     st.session_state["system_status"] = "scanning"
                     st.rerun()
 

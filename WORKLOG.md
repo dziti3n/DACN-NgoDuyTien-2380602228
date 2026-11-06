@@ -20,15 +20,25 @@ Tài liệu này được thiết kế để bạn chỉ cần mở ra là nắm
 
 Hệ thống của bạn hiện tại là một **Nền tảng SOAR & AI SOC Analyst Hướng Sự Kiện (Event-Driven SIEM Integration)** hoàn chỉnh chạy hoàn toàn cục bộ:
 
+> **Nguyên tắc Vận hành Cốt lõi (Zero-Trust):**  
+> *"Agent không SSH và không đọc trực tiếp log trên endpoint. Agent nhận alert do Wazuh gửi qua webhook. Khi cần điều tra lịch sử, agent yêu cầu một công cụ truy vấn chỉ đọc trên dữ liệu alert/archive của Wazuh; kết quả truy vấn cũng đến từ Wazuh."*
+
 ```
-[Máy Chủ Linux Lab]                [Wazuh SIEM Manager]              [Máy Host Windows Của Bạn]
-  Wazuh Agent ──────────────────────> Wazuh Rules Engine (Level >=7) ───> wazuh_listener.py (:5000 Webhook)
-  (inotify/journald)                  (Rule 5712, 5401, 550)            (X-SOC-Token, FIFO Queue Worker)
-                                                                                  │
-                                                                                  ├──> agent.py (AI ReAct phân tích)
-                                                                                  ├──> policy_engine.py (Whitelist, TTL)
-                                                                                  ├──> tools.py (Gọi wrapper UFW)
-                                                                                  └──> notifier.py (Gửi Gmail HTML)
+auth.log trên endpoint
+       │
+       ▼
+  Wazuh Agent / Logcollector (Đọc cục bộ tại endpoint)
+       │
+       ▼
+  Wazuh Manager: giải mã (Decoders), đối chiếu ruleset, tạo alert
+       ├── alert JSON ──────────► custom integration ──► listener ──► agent (Phân tích alert hiện tại)
+       │                         (/var/ossec/integrations/               (Đọc full_log, rule, IP, user)
+       │                          custom-ai-soc :5000)
+       │
+       └── archive sự kiện ────► Wazuh Indexer (Kho lưu trữ tập trung)
+                                       ▲
+                                       │ (Truy vấn lịch sử chỉ đọc)
+                                 agent yêu cầu backend truy vấn lịch sử (query_wazuh_history)
 ```
 
 ### 1. Bảng đối chiếu các tính năng đã hoàn thiện

@@ -85,46 +85,34 @@ def extract_ip(text):
     return m.group(0) if m else None
 
 def fetch_alerts(lines=1000):
-
-    """Đọc log qua SSH và thực thi các quy tắc phát hiện cảnh báo."""
-
+    """
+    Truy xuất các cảnh báo an ninh từ Kho dữ liệu tập trung của Wazuh SIEM (runs/wazuh_alerts.jsonl).
+    Tuân thủ nguyên tắc Zero-Trust: Agent nhận và xử lý cảnh báo từ SIEM, không SSH vào endpoint đọc raw log.
+    """
+    w_file = os.path.join("runs", "wazuh_alerts.jsonl")
+    if not os.path.exists(w_file):
+        return []
+    alerts = []
     try:
-
-        out, err = run_fixed_command(f"tail -n {lines} /var/log/auth.log")
-
-        if not out.strip() and err:
-
-            print(f"[-] Lỗi đọc log từ server lab ({HOST}): {err}")
-
-            return []
-
-        events = parse_log(out)
-
-        alerts = [alert_to_dict(a) for a in detect_all(events, baseline_path="baseline.json")]
-
-        return alerts
-
+        with open(w_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    item = json.loads(line)
+                    alt = item.get("alert")
+                    if alt:
+                        alerts.append(alt)
+        return alerts[-lines:]
     except Exception as ex:
-
-        print(f"[-] Lỗi kết nối SSH đến server lab ({HOST}): {ex}")
-
-        print("    Vui lòng kiểm tra máy ảo lab đã bật và cấu hình SSH trong .env.")
-
-        return None
+        print(f"[-] Lỗi đọc kho cảnh báo Wazuh: {ex}")
+        return []
 
 def cmd_scan(args):
-
-    """Lệnh quét và liệt kê toàn bộ các cảnh báo an ninh."""
-
-    print(f"[*] Đang kết nối đến máy chủ {HOST} (quét {args.lines} dòng log auth.log)...")
-
+    """Lệnh quét và liệt kê toàn bộ các cảnh báo an ninh từ Wazuh SIEM."""
+    print(f"[*] Đang truy vấn kho cảnh báo tập trung Wazuh SIEM (quét tối đa {args.lines} sự kiện)...")
     alerts = fetch_alerts(lines=args.lines)
-
     if alerts is None:
-
         sys.exit(1)
-
-    print(f"\n[+] Kết quả: Phát hiện tổng cộng {len(alerts)} cảnh báo an ninh:\n")
+    print(f"\n[+] Kết quả: Tìm thấy tổng cộng {len(alerts)} cảnh báo an ninh từ Wazuh SIEM:\n")
 
     if not alerts:
 
@@ -665,9 +653,9 @@ def main():
 
     # Lệnh: scan
 
-    p_scan = subparsers.add_parser("scan", help="Quét và hiển thị toàn bộ cảnh báo an ninh")
+    p_scan = subparsers.add_parser("scan", help="Quét và hiển thị toàn bộ cảnh báo an ninh từ Wazuh SIEM")
 
-    p_scan.add_argument("-l", "--lines", type=int, default=1000, help="Số dòng log auth.log quét (mặc định: 1000)")
+    p_scan.add_argument("-l", "--lines", type=int, default=1000, help="Số lượng cảnh báo Wazuh SIEM tối đa cần quét (mặc định: 1000)")
 
     p_scan.add_argument("-v", "--verbose", action="store_true", help="Hiển thị chi tiết JSON từng cảnh báo")
 
