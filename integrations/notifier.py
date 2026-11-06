@@ -261,39 +261,44 @@ def send_alert_email(
     msg.attach(text_part)
     msg.attach(html_part)
 
-    try:
-        # Kết nối tới SMTP Server (smtp.gmail.com:587)
-        server = smtplib.SMTP(config["smtp_server"], config["smtp_port"], timeout=15)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(config["sender_email"], config["sender_password"])
-        server.sendmail(config["sender_email"], [target_recipient], msg.as_string())
-        server.quit()
+    last_error = None
+    for attempt in range(3):
+        try:
+            # Kết nối tới SMTP Server (smtp.gmail.com:587) với cơ chế retry phòng ngừa lag DNS/mạng
+            server = smtplib.SMTP(config["smtp_server"], config["smtp_port"], timeout=15)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(config["sender_email"], config["sender_password"])
+            server.sendmail(config["sender_email"], [target_recipient], msg.as_string())
+            server.quit()
 
-        return {
-            "status": "sent",
-            "recipient": target_recipient,
-            "subject": subject,
-            "preview_path": str(preview_path),
-        }
-    except smtplib.SMTPAuthenticationError as auth_err:
-        err_msg = (
-            f"Lỗi xác thực Gmail SMTP: {auth_err}. "
-            "Lưu ý: Bạn phải tạo 'Mật khẩu ứng dụng' (App Password 16 ký tự) trong Google Account "
-            "(Security -> 2-Step Verification -> App passwords), không dùng mật khẩu tài khoản thường."
-        )
-        return {
-            "status": "error",
-            "error": err_msg,
-            "preview_path": str(preview_path),
-        }
-    except Exception as ex:
-        return {
-            "status": "error",
-            "error": f"Lỗi gửi email: {str(ex)}",
-            "preview_path": str(preview_path),
-        }
+            return {
+                "status": "sent",
+                "recipient": target_recipient,
+                "subject": subject,
+                "preview_path": str(preview_path),
+            }
+        except smtplib.SMTPAuthenticationError as auth_err:
+            err_msg = (
+                f"Lỗi xác thực Gmail SMTP: {auth_err}. "
+                "Lưu ý: Bạn phải tạo 'Mật khẩu ứng dụng' (App Password 16 ký tự) trong Google Account "
+                "(Security -> 2-Step Verification -> App passwords), không dùng mật khẩu tài khoản thường."
+            )
+            return {
+                "status": "error",
+                "error": err_msg,
+                "preview_path": str(preview_path),
+            }
+        except Exception as ex:
+            last_error = ex
+            time.sleep(1.0)
+
+    return {
+        "status": "error",
+        "error": f"Lỗi gửi email: {last_error}",
+        "preview_path": str(preview_path),
+    }
 
 
 def send_test_email(recipient: str = None) -> dict:

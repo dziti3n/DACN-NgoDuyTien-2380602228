@@ -31,7 +31,7 @@ DEFAULT_PROTECTED_NETWORKS = [
 ]
 
 DEFAULT_BLOCK_TTL_MINUTES = 15  # Thời gian cách ly mặc định: 15 phút
-MAX_BLOCKS_PER_HOUR = 5        # Giới hạn tối đa 5 lần chặn trong 1 giờ (Anti-DoS)
+MAX_BLOCKS_PER_HOUR = int(os.getenv("MAX_BLOCKS_PER_HOUR", "50"))  # Mặc định 50 lần/giờ (phù hợp lab test & chống DoS)
 
 
 def load_protected_ips() -> set:

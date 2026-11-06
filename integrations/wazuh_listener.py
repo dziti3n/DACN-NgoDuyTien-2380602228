@@ -602,12 +602,20 @@ class WazuhWebhookManager:
         print(f"   Thời gian: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 75)
 
-        # Kiểm tra IP Cooldown chống bão alert
-        if src_ip and self.is_in_cooldown(src_ip):
-            print(f"  [COOLDOWN] Bỏ qua điều tra IP {src_ip} (đang trong thời gian làm nguội 15 phút).")
+        # Kiểm tra IP Cooldown chống bão alert & phát hiện leo thang tấn công
+        active_blocks = load_active_blocks()
+        is_already_blocked = src_ip in active_blocks
+        is_escalation = str(rule_id) in ("5712", "5763", "5404") or int(rule_level) >= 10
+
+        if is_already_blocked:
+            print(f"  [ALREADY BLOCKED] IP {src_ip} hiện đang bị cách ly trên UFW. Bỏ qua điều tra lặp lại.")
+            return {"status": "skipped", "reason": f"IP {src_ip} already blocked"}
+
+        if src_ip and self.is_in_cooldown(src_ip) and not is_escalation:
+            print(f"  [COOLDOWN] Bỏ qua điều tra IP {src_ip} (đang trong thời gian làm nguội).")
             return {"status": "skipped", "reason": f"IP {src_ip} in cooldown"}
 
-        if src_ip:
+        if src_ip and not is_escalation:
             self.ip_cooldown[src_ip] = time.time()
 
         self.total_alerts_received += 1
@@ -625,6 +633,15 @@ class WazuhWebhookManager:
         if acting_user == "agent_soc":
             print(f"🔄 [SOAR INTERNAL TELEMETRY] Bỏ qua sự kiện nội bộ từ 'agent_soc' (Rule {rule_id}) để chống vòng lặp.")
             return {"status": "skipped", "reason": "agent_soc internal telemetry loop prevention"}
+
+        # 0.1. Tier 1 Telemetry Filter (Chống nghẽn hàng đợi LLM - Queue Starvation):
+        # Các sự kiện thử sai đơn lẻ (Rule 5710, 5711, 5716, 5760 với Level < 7) đã được lưu vào
+        # wazuh_alerts.jsonl để Agent truy vấn lịch sử. Tuyệt đối không gọi Local LLM cho từng lần gõ sai đơn lẻ
+        # (tránh việc Hydra bắn 262 lần làm hàng đợi LLM bị kẹt hàng tiếng đồng hồ).
+        # Khi đạt ngưỡng 8+ lần trong 120s, Wazuh SIEM sẽ kích hoạt Rule 5712 (Level 10 - Brute Force).
+        if str(rule_id) in ("5710", "5711", "5716", "5760") and int(rule_level) < 7:
+            print(f"📊 [TELEMETRY BUFFERED] Lưu vết xác thực thất bại từ {src_ip} (Rule {rule_id}). Đang chờ ngưỡng Brute Force (Rule 5712)...")
+            return {"status": "telemetry_logged", "reason": f"Single auth failure recorded for Rule {rule_id}"}
 
         # 1. Thử nghiệm Fast-Path Triage xác định (Tier 1.5 - <1ms)
         fast_conclusion = fast_path_triage(alert)
@@ -675,7 +692,11 @@ class WazuhWebhookManager:
 
         # 2. Thẩm định qua Policy Engine & Quyết định phản ứng
         response_info = {"action": "none", "status": "none"}
-        should_block = any("chặn" in r.lower() or "block" in r.lower() for r in recs) or (verdict == "malicious_activity_likely" and src_ip)
+        should_block = (
+            any("chặn" in r.lower() or "block" in r.lower() for r in recs)
+            or (verdict == "malicious_activity_likely" and src_ip)
+            or (str(rule_id) in ("5712", "5763") and src_ip)
+        )
 
         if should_block and src_ip:
             print(f"\n🛡️ [POLICY ENGINE] Thẩm định an toàn cho đề xuất cách ly IP '{src_ip}'...")

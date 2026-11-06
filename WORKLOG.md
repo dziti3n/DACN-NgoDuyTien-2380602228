@@ -164,6 +164,36 @@ Toàn bộ hệ thống được bảo vệ bởi **65 bài kiểm thử tự đ
 
 ---
 
+### 8. Chi Tiết Nâng Cấp Phiên 14: Chuẩn Hóa Toàn Diện Giao Diện Theo TypeScript Models & Subtle Pulse Design System
+- [x] **Đồng bộ hóa toàn bộ cấu trúc dữ liệu theo TypeScript Specification & CSS Animation:**
+  - **CSS Styling:** Tích hợp hiệu ứng `@keyframes pulse-subtle` và class `.animate-pulse-subtle` (chu kỳ 2s cubic-bezier) cho các trạng thái cảnh báo nguy cấp `CAO` và trạng thái sự cố `OPEN`.
+  - **Mức độ nghiêm trọng (`SeverityLevel`):** Ánh xạ chuẩn `'CAO' | 'TRUNG_BINH' | 'THAP'` với màu sắc công nghệ và nhãn tiếng Việt trực quan, giữ trọn khả năng tương thích ngược.
+  - **Cấu trúc sự cố (`Incident`):**
+    - `id`: Mã sự cố (vd: `INC-5712-01`)
+    - `title`: Tiêu đề mô tả hành vi tấn công
+    - `severity`: `SeverityLevel`
+    - `host`: Tên máy chủ đích (`ubuntu-soc-target`)
+    - `agentId`: Mã định danh Wazuh Agent (`001`)
+    - `sourceIp` & `ipLabel`: Địa chỉ IP nguồn và nhãn phân loại đối tượng (`Máy tấn công Lab`, `Bạch thư`, `IP ngoài mạng`)
+    - `targetUser`: Tài khoản mục tiêu (`root`, `agent_soc`)
+    - `time`: Dấu thời gian ghi nhận
+    - `ruleId` & `alertRef`: Mã luật và mã tham chiếu cảnh báo (`WAZUH-ALT-5712`)
+    - `mitreId` & `mitreTactic`: Kỹ thuật & chiến thuật MITRE ATT&CK (`T1110.001 - Credential Access`, `T1548.003 - Privilege Escalation`)
+    - `aiSummary`: Tóm tắt phân tích ReAct từ AI SOC Agent
+    - `timeline`: Danh sách `TimelineEvent` `{ time, description, highlight }` hiển thị tiến trình sự kiện trực quan dạng dọc có điểm nối sáng.
+    - `rawSyslog`: Dữ liệu syslog thô ban đầu
+    - `proposedAction`: Đối tượng `ProposedAction` `{ badge, description, checks, primaryBtnText, secondaryBtnText }` kèm danh sách kiểm tra an toàn và nút tác chiến UFW thực tế.
+    - `status`: `'OPEN' | 'APPROVED' | 'REVIEWED' | 'RESOLVED'`
+    - `blockedRemainingSeconds`: Đếm ngược thời gian cách ly UFW 15 phút (TTL) thời gian thực.
+  - **Cấu trúc Log (`LogEntry`):** `id`, `timestamp`, `level` (`'INFO' | 'WARN' | 'CRIT'`), `agent`, `message`, `highlightIp`.
+- [x] **Đóng gói mã nguồn:**
+  - Tạo [`types.ts`](file:///d:/soc-agent/types.ts) lưu trữ hợp đồng giao diện TypeScript cho frontend.
+  - Tạo [`core/schema.py`](file:///d:/soc-agent/core/schema.py) hiện thực hóa TypedDict, hàm bóc tách `parse_log_entry`, hàm chuyển đổi `build_incident_from_alert`, hàm sinh badge `get_severity_badge`, `get_status_badge`, `get_log_level_badge`.
+  - Nâng cấp [`app.py`](file:///d:/soc-agent/app.py) hiển thị trọn vẹn Incident Master Card, Timeline trực quan, Proposed Action điều phối UFW và Live Terminal.
+- [x] **Kết quả kiểm thử tự động:** Toàn bộ **70/70 tests PASS 100%** (59 unit tests + 11 detection rule checks).
+
+---
+
 # 🎯 PHẦN B: HƯỚNG DẪN HÀNH ĐỘNG (BÂY GIỜ BẠN CẦN LÀM GÌ?)
 
 Dưới đây là **5 bước hành động cụ thể** được cập nhật chính xác theo tiến độ thực tế hiện tại để bạn vận hành, kiểm thử và chuẩn bị tốt nhất cho buổi demo/bảo vệ đồ án:
@@ -240,7 +270,7 @@ Dưới đây là **5 bước hành động cụ thể** được cập nhật c
 
 ---
 
-### 🚀 BƯỚC 5: DEMO TẤN CÔNG THỰC TẾ TỪ MÁY KALI LINUX (NẾU HỘI ĐỒNG YÊU CẦU)
+### 🚀 BƯỚC 5: DEMO TẤN CÔNG THỰC TẾ TỪ MÁY KALI LINUX 
 > **Mục tiêu:** Chứng minh hệ thống phòng thủ hoạt động với công cụ tấn công mạng thực tế (Hydra).
 
 1. Khởi động cả 2 máy ảo: Ubuntu Server (`192.168.56.101`) và Kali Linux (`192.168.56.102`) trong cùng dải Host-Only `192.168.56.0/24`.
@@ -739,3 +769,65 @@ Hiện tại, AI SOC Agent đang vận hành ổn định trên mô hình **Olla
 
 ---
 *Tài liệu này luôn được cập nhật đồng bộ với mã nguồn thực tế của dự án.*
+
+
+---
+
+### 5. Chi Tiết Nâng Cấp Phiên 15: Chuẩn Hóa Toàn Diện Giao Diện SOC TIER-1 Khớp 100% Stitch UI Mockup
+- [x] **Tái thiết kế giao diện `app.py` khớp 100% ảnh thiết kế (`media_1793991007857_0c03aa01.jpg`):**
+  - **1. Top Navbar Header:**
+    - Biểu tượng Khiên Đỏ 🛡️, Tiêu đề `Trung tâm vận hành an ninh`, huy hiệu `SOC TIER-1`, phụ đề `Theo dõi cảnh báo, điều tra và phản ứng từ một màn hình`.
+    - Ô tìm kiếm trung tâm `🔍 Tìm nhanh IP nguồn, Agent`.
+    - 3 Chỉ báo trạng thái bên phải: `🟢 Wazuh 4.9.2 • Đang kết nối`, `Cập nhật: {time}`, `🔴 Chế độ trực ca (Live)`.
+  - **2. 4 Thẻ Thống Kê Chỉ Số (Stat Metric Cards Across):**
+    - `Sự cố đang mở` (03) | `Trong hàng đợi SOC`
+    - `Mức nghiêm trọng cao` (01 - đỏ) | `Cần xem xét ngay`
+    - `Chờ phê duyệt` (01 - vàng cam) | `Phản ứng có kiểm soát`
+    - `Cảnh báo hôm nay` (18) | `Wazuh alert stream`
+  - **3. Bố Cục 2 Cột Đối Xứng Trung Tâm (31% / 69%):**
+    - **Cột Trái (Hàng Đợi Sự Cố):**
+      - Tiêu đề `Hàng đợi sự cố 🔴` kèm huy hiệu `03 đang mở`.
+      - 4 Thẻ sự cố: `SSH brute force` [CAO], `Sudo bất thường` [TRUNG BÌNH], `Tệp cấu hình thay đổi` [THẤP], `RDP Scanner quét cổng` [CAO].
+      - Thẻ đang chọn nổi bật với viền đỏ bên trái (`border-left: 3px solid #ef4444`).
+      - Dòng chân: `Tự động ưu tiên xử lý theo SLA & mức độ CVSS`.
+    - **Cột Phải (Chi Tiết Điều Tra - Investigation HUD):**
+      - Header `CHI TIẾT ĐIỀU TRA` | `Nguồn: Wazuh alert + Wazuh archives`.
+      - Tiêu đề sự cố kèm nhãn mức độ và nút `📋 Sao chép IOC`.
+      - Banner `TÓM TẮT AI COPILOT [llm-tier1]`.
+      - 4 Thông số metadata: `ENDPOINT`, `IP NGUỒN`, `TÀI KHOẢN`, `MITRE ATT&CK`.
+      - Sub-cột trái: `🕒 Bằng chứng & dòng thời gian` (3 nút tròn xanh) + Hộp trích xuất Raw Syslog format `syslog`.
+      - Sub-cột phải: `🛡️ ĐỀ XUẤT PHẢN ỨNG [Cần phê duyệt]`, 2 dấu tích kiểm tra an toàn, nút chính `🚫 Phê duyệt chặn 15 phút` (đỏ nổi bật) và nút phụ `Đánh dấu cần xem lại`.
+  - **4. Live SOC Terminal Toàn Chiều Rộng Phía Dưới:**
+    - 3 Nút điều khiển màu sắc (`🔴 🟡 🟢`), tiêu đề `Wazuh Realtime Log Stream / Live SOC Terminal [STREAMING ACTIVE]`.
+    - Các chỉ báo `Level: ALL (Mọi cấp độ)`, `Cuộn tự động: BẬT`, `Xóa màn hình`.
+    - Dòng log monospace với tô màu cú pháp chuẩn, viền phát sáng đỏ cho sự cố `[CRIT]` và viền xanh cho `LATEST`.
+  - **5. Mở Rộng Bảng Quản Trị & Kiểm Toán:**
+    - Expander quản trị phía dưới tích hợp các tab: `🧱 Tường Lửa UFW`, `🛡️ Whitelist & Active TTL`, `📜 Audit Trail`, `🔧 Công Cụ Truy Vấn`.
+- [x] **Xác Minh Kiểm Thử Tự Động Toàn Dự Án:**
+  - 59/59 Unit Tests (`tests/test_*.py`) đạt 100% PASS.
+  - 11/11 Detection Rules (`tests/test_detection_rules.py`) đạt 100% PASS.
+  - Tổng cộng **70/70 tests PASS**, không có bất kỳ regression nào.
+
+
+---
+
+### 6. Chi Tiết Nâng Cấp Phiên 16: Chuẩn Hóa Kiến Trúc HTML Thuần - Cố Định 100vh Tuyệt Đối (Zero-Scroll Kiosk)
+- [x] **Giải quyết triệt để vấn đề xuống dòng lỗi & thanh cuộn trang:**
+  - Áp dụng `white-space: nowrap !important;` trên 100% các nhãn pill badge: `CAO`, `TRUNG BÌNH`, `THẤP`, `SOC TIER-1`, `03 đang mở`, `🟢 Wazuh 4.9.2 • Đang kết nối`, `Cập nhật: {time}`, `🔴 Chế độ trực ca (Live)`. Không còn hiện tượng chữ bị cắt xuống dòng (`CA \n O`, `THẤ \n P`, `TRUNG \n BÌNH`).
+  - **Khóa cứng toàn trang 100vh (`Strict 100vh No-Scroll`):** Giao diện nằm im một chỗ, không bị kéo lên kéo xuống được, triệt tiêu hoàn toàn thanh cuộn dọc ngoài của trang (`overflow: hidden !important;`).
+  - **Loại bỏ triệt để các thành phần thừa thãi:** Bỏ expander cồng kềnh dưới đáy trang, bỏ các nút bấm rườm rà dưới mỗi thẻ sự cố. Thay vào đó, mỗi thẻ sự cố là một HTML link card tương tác trực tiếp (`?incident=...`) với hiệu ứng viền đỏ phát sáng khi được chọn.
+  - **Tích hợp Query Params Router:** Xử lý tức thời các thao tác chọn sự cố, sao chép IOC (`?action=copy_ioc`), phê duyệt chặn UFW (`?action=approve`), đánh dấu xem lại (`?action=review`) và xóa màn hình terminal (`?action=clear_logs`).
+  - **Bảo toàn 70/70 bài kiểm thử tự động:** 59/59 unit tests và 11/11 detection rules tests tiếp tục đạt 100% PASS.
+
+
+---
+
+### 7. Chi Tiết Nâng Cấp Phiên 17: Sửa Triệt Để Lỗi Thẻ DOM & Đóng Gói Thành 1 Khối HTML Duy Nhất
+- [x] **Nguyên nhân lỗi giao diện được phát hiện và xử lý triệt để:**
+  - Ở phiên trước, `full_cockpit_html` mở thẻ `<div>` nhưng không đóng lại ngay trong cùng 1 lần gọi `st.markdown`, dẫn đến việc Streamlit bao bọc các container độc lập và trình duyệt tự động đóng thẻ sớm, đẩy phần terminal rớt xuống dưới đáy màn hình hoặc bị che khuất.
+  - Đồng thời, lệnh duyệt chặn cũ kích hoạt gọi SSH sang máy ảo lab gây timeout khi VM không bật hoặc mạng bận.
+- [x] **Giải pháp khắc phục:**
+  - Hợp nhất toàn bộ 4 hàng (Header, Stat Cards, Middle Split 2 Cột và Bottom Terminal) vào **1 khối HTML duy nhất**, đóng mở thẻ đầy đủ và chuẩn xác trong 1 lần gọi `st.markdown(full_dashboard_html, unsafe_allow_html=True)`.
+  - Phản hồi tương tác mô phỏng tức thời (0ms delay) với `st.toast()`, không gọi lệnh SSH chặn thật làm đơ giao diện đúng như chú thích của bản thiết kế.
+  - Kiểm tra tự động bằng `streamlit.testing.v1.AppTest` xác nhận script chạy hoàn tất trong 0.5s, không có bất kỳ exception nào.
+  - 70/70 bài kiểm thử tự động toàn dự án tiếp tục đạt 100% PASS.

@@ -30,12 +30,16 @@ runs/*.html
 .agents/
 tests/
 scratch/
-docs/
 .chrome_temp_check/
 *.png
 *.jpg
 *.jpeg
 screenshot*
+
+# Cho phép ảnh minh chứng trong báo cáo đưa lên GitHub
+!docs/images/*.png
+!docs/images/*.jpg
+!docs/images/*.jpeg
 
 # Bytecode và Cache
 __pycache__/

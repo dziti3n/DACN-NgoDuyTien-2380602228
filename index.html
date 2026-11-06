@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html class="dark h-full" lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Bàn điều khiển tác chiến AI SOC - Wazuh SIEM & ReAct Agent</title>
+  <!-- Tailwind CSS CDN with plugins -->
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <!-- Tailwind CSS Custom Configuration -->
+  <script data-purpose="tailwind-config">
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            soc: {
+              bg: '#070b14',
+              surface: '#0d1322',
+              card: '#11192d',
+              cardHover: '#16223b',
+              border: '#1f2e4d',
+              borderLight: '#2c3e66',
+              accentRed: '#ef4444',
+              accentYellow: '#f59e0b',
+              accentBlue: '#3b82f6',
+              accentGreen: '#10b981',
+              muted: '#64748b'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Custom Styles: Typography & Animations -->
+  <style data-purpose="custom-typography">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    
+    html, body {
+      height: 100vh;
+      max-height: 100vh;
+      overflow: hidden;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', sans-serif;
+      background-color: #070b14;
+      color: #cbd5e1;
+      user-select: none;
+    }
+
+    code, pre, .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Force pills and badges to never break or wrap letters */
+    .badge-pill {
+      white-space: nowrap !important;
+      word-break: keep-all !important;
+      flex-shrink: 0 !important;
+      min-width: max-content !important;
+      display: inline-block !important;
+    }
+  </style>
+  <style data-purpose="scrollbar-and-glow">
+    /* Custom Scrollbar for Terminals, Timelines & Proposed Actions */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0d1322;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1f2e4d;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #2d4370;
+    }
+
+    /* Pulse Glows */
+    .glow-green {
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.45);
+    }
+    .glow-red {
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.35);
+    }
+    .selected-incident-border {
+      border-left: 3px solid #ef4444 !important;
+      background-color: #162035 !important;
+    }
+  </style>
+</head>
+<body class="h-screen max-h-screen overflow-hidden flex flex-col antialiased selection:bg-rose-500 selection:text-white bg-[#070b14] text-[#cbd5e1]">
+
+<!-- BEGIN: MainHeader -->
+<header class="border-b border-soc-border bg-soc-surface/90 backdrop-blur sticky top-0 z-40 px-4 md:px-6 py-2 flex-shrink-0">
+  <div class="w-full flex flex-col md:flex-row items-start md:items-center justify-between gap-3 px-1 sm:px-2">
+    <!-- Logo & Main Titles -->
+    <div class="flex items-center space-x-3 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-soc-card border border-soc-border flex items-center justify-center text-soc-accentRed shadow-inner shrink-0">
+        <svg class="w-4 h-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+        </svg>
+      </div>
+      <div class="whitespace-nowrap shrink-0">
+        <h1 class="text-sm md:text-base font-bold tracking-tight text-white flex items-center gap-2">
+          Hệ thống Tác tử An ninh mạng Tự trị
+          <span class="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/30 font-mono font-medium badge-pill">AI SOC TIER-1</span>
+        </h1>
+        <p class="text-[10.5px] text-slate-400">Giám sát Wazuh SIEM 4.9.2 • Suy luận ReAct cục bộ • Phòng vệ chủ động UFW</p>
+      </div>
+    </div>
+
+    <!-- Quick Search Bar -->
+    <div class="flex-1 max-w-md mx-3 hidden lg:block">
+      <div class="relative">
+        <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-500">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+          </svg>
+        </span>
+        <input class="w-full pl-8 pr-3 py-1 bg-soc-card/80 border border-soc-border focus:border-soc-accentBlue rounded-md text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-soc-accentBlue transition font-mono" id="quick-search-input" placeholder="Tìm kiếm IP nguồn, Rule ID, MITRE ATT&CK, Agent ID (vd: 5712, 192.168.56.102)..." type="text">
+      </div>
+    </div>
+
+    <!-- Live Status & Toolbar Actions -->
+    <div class="flex items-center flex-wrap gap-2 whitespace-nowrap shrink-0">
+      <!-- Wazuh Connection Badge -->
+      <div class="flex items-center space-x-1.5 bg-emerald-950/40 border border-emerald-500/40 text-emerald-400 px-2 py-0.5 rounded-full text-xs font-mono badge-pill">
+        <span class="relative flex h-2 w-2">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 glow-green"></span>
+        </span>
+        <span>Wazuh 4.9.2 • Đang kết nối (192.168.56.101)</span>
+      </div>
+      <!-- Timestamp Indicator -->
+      <span class="text-xs font-mono text-slate-400 bg-soc-card px-2 py-0.5 rounded border border-soc-border badge-pill" id="last-sync-time">Cập nhật: 10:45:29</span>
+      <!-- Live Duty Mode Button -->
+      <button class="flex items-center gap-1.5 bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-600/40 px-2.5 py-0.5 rounded text-xs font-medium transition cursor-pointer badge-pill" id="live-mode-toggle">
+        <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+        <span>Chế độ trực ca (Live)</span>
+      </button>
+    </div>
+  </div>
+</header>
+<!-- END: MainHeader -->
+
+<!-- BEGIN: MainContent -->
+<main class="flex-1 min-h-0 w-full px-4 md:px-6 py-2.5 flex flex-col gap-2.5 overflow-hidden">
+  
+  <!-- BEGIN: KPIStatsSection -->
+  <section class="grid grid-cols-2 md:grid-cols-4 gap-2.5 flex-shrink-0" data-purpose="stat-metrics">
+    <!-- Stat 1 -->
+    <div class="bg-soc-card border border-soc-border rounded-lg p-2.5 transition hover:border-slate-600">
+      <p class="text-[11px] font-medium text-slate-400 whitespace-nowrap">Sự cố đang mở</p>
+      <div class="mt-0.5 flex items-baseline justify-between">
+        <span class="text-xl font-bold text-white tracking-tight font-mono">03</span>
+        <span class="text-[10.5px] text-slate-400 whitespace-nowrap">Hàng đợi điều tra SOC</span>
+      </div>
+    </div>
+    <!-- Stat 2 -->
+    <div class="bg-soc-card border border-soc-border rounded-lg p-2.5 transition hover:border-rose-500/50">
+      <p class="text-[11px] font-medium text-slate-400 whitespace-nowrap">Mức nghiêm trọng cao</p>
+      <div class="mt-0.5 flex items-baseline justify-between">
+        <span class="text-xl font-bold text-rose-500 tracking-tight font-mono glow-red">01</span>
+        <span class="text-[10.5px] text-rose-400 font-medium whitespace-nowrap">Cần phản ứng tức thời</span>
+      </div>
+    </div>
+    <!-- Stat 3 -->
+    <div class="bg-soc-card border border-soc-border rounded-lg p-2.5 transition hover:border-amber-500/50">
+      <p class="text-[11px] font-medium text-slate-400 whitespace-nowrap">Chờ thẩm định Policy</p>
+      <div class="mt-0.5 flex items-baseline justify-between">
+        <span class="text-xl font-bold text-amber-400 tracking-tight font-mono">01</span>
+        <span class="text-[10.5px] text-slate-400 whitespace-nowrap">Deterministic Guardrails</span>
+      </div>
+    </div>
+    <!-- Stat 4 -->
+    <div class="bg-soc-card border border-soc-border rounded-lg p-2.5 transition hover:border-slate-600">
+      <p class="text-[11px] font-medium text-slate-400 whitespace-nowrap">Cảnh báo SIEM hôm nay</p>
+      <div class="mt-0.5 flex items-baseline justify-between">
+        <span class="text-xl font-bold text-white tracking-tight font-mono">18</span>
+        <span class="text-[10.5px] text-slate-400 whitespace-nowrap">Wazuh Webhook stream</span>
+      </div>
+    </div>
+  </section>
+  <!-- END: KPIStatsSection -->
+
+  <!-- BEGIN: PrimaryDashboardGrid (Middle Row) -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0 items-stretch overflow-hidden">
+    
+    <!-- BEGIN: IncidentQueueColumn (Left Col: 4 cols) -->
+    <section class="lg:col-span-4 xl:col-span-4 bg-soc-card border border-soc-border rounded-lg overflow-hidden flex flex-col h-full shadow-sm">
+      <div class="p-2.5 border-b border-soc-border flex items-center justify-between bg-soc-surface/60 flex-shrink-0">
+        <div class="flex items-center gap-2 whitespace-nowrap shrink-0">
+          <h2 class="text-xs font-semibold text-white tracking-wide">Hàng đợi cảnh báo sự cố</h2>
+          <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+        </div>
+        <span class="text-[10.5px] font-mono px-2 py-0.5 rounded bg-soc-surface border border-soc-border text-slate-400 badge-pill">03 đang mở</span>
+      </div>
+      <!-- Incident Items List -->
+      <div class="p-2 space-y-2 overflow-y-auto flex-1 min-h-0" id="incident-list-container">
+        <!-- Incident 1: SSH Brute force (Selected default) -->
+        <article class="incident-card selected-incident-border cursor-pointer p-2.5 rounded bg-soc-cardHover border border-soc-border hover:border-slate-500 transition" data-incident="INC-2026-0042">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <h3 class="text-xs font-semibold text-white truncate">SSH brute force</h3>
+              <p class="text-[10.5px] text-slate-400 mt-0.5 font-mono whitespace-nowrap">INC-2026-0042 • Ubuntu-Server (001)</p>
+              <div class="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                <span class="text-rose-400 font-bold">192.168.56.102</span>
+                <span>•</span>
+                <span>10:42:18</span>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-700/60 font-mono tracking-wider badge-pill">CAO</span>
+          </div>
+        </article>
+        <!-- Incident 2: Sudo bất thường -->
+        <article class="incident-card cursor-pointer p-2.5 rounded bg-soc-surface/50 border border-soc-border hover:border-slate-500 hover:bg-soc-cardHover transition" data-incident="INC-2026-0041">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <h3 class="text-xs font-semibold text-slate-200 truncate">Sudo bất thường</h3>
+              <p class="text-[10.5px] text-slate-400 mt-0.5 font-mono whitespace-nowrap">INC-2026-0041 • Ubuntu-Server (001)</p>
+              <div class="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                <span>user: <span class="text-amber-300 font-semibold">deploy</span></span>
+                <span>•</span>
+                <span>10:31:07</span>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-400 border border-amber-700/60 font-mono tracking-wider badge-pill">TRUNG BÌNH</span>
+          </div>
+        </article>
+        <!-- Incident 3: Tệp cấu hình thay đổi -->
+        <article class="incident-card cursor-pointer p-2.5 rounded bg-soc-surface/50 border border-soc-border hover:border-slate-500 hover:bg-soc-cardHover transition" data-incident="INC-2026-0039">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <h3 class="text-xs font-semibold text-slate-200 truncate">Tệp cấu hình thay đổi</h3>
+              <p class="text-[10.5px] text-slate-400 mt-0.5 font-mono whitespace-nowrap">INC-2026-0039 • Ubuntu-Server (001)</p>
+              <div class="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                <span class="truncate max-w-[170px] text-blue-300" title="/etc/ssh/sshd_config">/etc/ssh/sshd_config</span>
+                <span>•</span>
+                <span>09:58:44</span>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-400 border border-blue-700/60 font-mono tracking-wider badge-pill">THẤP</span>
+          </div>
+        </article>
+        <!-- Incident 4: Tạo tài khoản lạ ngoài Baseline -->
+        <article class="incident-card cursor-pointer p-2.5 rounded bg-soc-surface/50 border border-soc-border hover:border-slate-500 hover:bg-soc-cardHover transition" data-incident="INC-2026-0038">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <h3 class="text-xs font-semibold text-slate-200 truncate">Tạo tài khoản lạ ngoài Baseline</h3>
+              <p class="text-[10.5px] text-slate-400 mt-0.5 font-mono whitespace-nowrap">INC-2026-0038 • Ubuntu-Server (001)</p>
+              <div class="flex items-center gap-1.5 mt-0.5 text-[10px] font-mono text-slate-400 whitespace-nowrap">
+                <span>user: <span class="text-rose-400 font-semibold">evil_backdoor</span></span>
+                <span>•</span>
+                <span>09:41:12</span>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-700/60 font-mono tracking-wider badge-pill">CAO</span>
+          </div>
+        </article>
+      </div>
+      <!-- Queue Footer Info -->
+      <div class="p-2 bg-soc-surface/80 border-t border-soc-border text-center flex-shrink-0">
+        <p class="text-[10.5px] text-slate-400 font-mono whitespace-nowrap">Đồng bộ sự kiện tự động từ Wazuh SIEM qua Webhook FIFO Queue</p>
+      </div>
+    </section>
+    <!-- END: IncidentQueueColumn -->
+
+    <!-- BEGIN: InvestigationDetailColumn (Right Col: 8 cols) -->
+    <section class="lg:col-span-8 xl:col-span-8 bg-soc-card border border-soc-border rounded-lg p-3 flex flex-col justify-between h-full shadow-sm overflow-hidden">
+      <!-- Top Investigation Meta Header -->
+      <div class="flex items-center justify-between pb-2 border-b border-soc-border flex-shrink-0">
+        <div>
+          <h2 class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Chi tiết điều tra &amp; Chứng cứ sự cố</h2>
+        </div>
+        <span class="text-[10.5px] font-mono text-slate-400 bg-soc-surface px-2 py-0.5 rounded border border-soc-border badge-pill">
+          Nguồn: Wazuh Alerts + Archives API (Zero-Trust)
+        </span>
+      </div>
+
+      <!-- Incident Header Details -->
+      <div class="flex items-center justify-between gap-2 mt-2 flex-shrink-0">
+        <div>
+          <div class="flex items-center gap-2.5">
+            <h3 class="text-base font-bold text-white tracking-tight" id="detail-title">SSH brute force</h3>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-700 font-mono tracking-wider badge-pill" id="detail-severity">CAO</span>
+          </div>
+          <p class="text-[10.5px] text-slate-400 font-mono mt-0.5 whitespace-nowrap" id="detail-meta">
+            INC-2026-0042 • Rule 5712 (Level 10) • Wazuh alert 1730972538.081
+          </p>
+        </div>
+        <button class="text-xs bg-soc-surface hover:bg-soc-border border border-soc-border px-2.5 py-1 rounded text-slate-300 font-mono flex items-center gap-1.5 cursor-pointer badge-pill transition" id="btn-copy-ioc">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          Sao chép IOC
+        </button>
+      </div>
+
+      <!-- KẾT LUẬN ĐIỀU TRA AI SOC AGENT (ReAct Engine) -->
+      <div class="bg-blue-950/25 border border-blue-500/35 rounded-lg p-2.5 my-1.5 flex-shrink-0">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div class="flex items-center gap-1.5 text-blue-400 text-xs font-semibold whitespace-nowrap">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            <span id="ai-header-title">KẾT LUẬN ĐIỀU TRA AI SOC AGENT</span>
+            <span class="text-[9.5px] bg-blue-500/20 text-blue-300 px-1.5 py-0.2 rounded border border-blue-500/40 font-mono badge-pill" id="ai-model-badge">Ollama ReAct</span>
+          </div>
+          <span class="text-[9.5px] bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded border border-rose-500/40 font-mono font-bold badge-pill" id="ai-verdict-badge">🚨 NGUY HIỂM (Malicious)</span>
+        </div>
+        <p class="text-xs text-slate-200 mt-1 leading-relaxed" id="ai-summary-text">
+          Tác tử AI thực hiện chu trình ReAct: Phát hiện chuỗi 9 lần nhập sai mật khẩu SSH dồn dập từ IP 192.168.56.102 trong 2 phút (Wazuh Rule 5712, Level 10). Truy vấn chỉ đọc kho lưu trữ Wazuh Archives xác nhận 0 phiên đăng nhập thành công trong 24h qua. Kết luận: Tấn công dò mật khẩu (Brute Force). Đề xuất thẩm định Policy và cách ly IP tạm thời qua UFW.
+        </p>
+      </div>
+
+      <!-- Metadata Grid Attributes -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 py-1.5 border-y border-soc-border/80 flex-shrink-0">
+        <div>
+          <p class="text-[10px] font-mono text-slate-400 uppercase whitespace-nowrap">Endpoint</p>
+          <p class="text-xs font-semibold text-white mt-0.5 font-mono whitespace-nowrap" id="meta-endpoint">Ubuntu-Server (ubuntu-lab) • 001</p>
+        </div>
+        <div>
+          <p class="text-[10px] font-mono text-slate-400 uppercase whitespace-nowrap">IP nguồn</p>
+          <p class="text-xs font-semibold text-rose-400 mt-0.5 font-mono flex items-center gap-1 whitespace-nowrap" id="meta-src-ip">
+            <span>192.168.56.102</span>
+            <span class="text-[9px] bg-slate-800 text-slate-400 px-1 rounded badge-pill" id="meta-ip-label">RFC1918</span>
+          </p>
+        </div>
+        <div>
+          <p class="text-[10px] font-mono text-slate-400 uppercase whitespace-nowrap">Tài khoản đích</p>
+          <p class="text-xs font-semibold text-amber-300 mt-0.5 font-mono whitespace-nowrap" id="meta-account">admin</p>
+        </div>
+        <div>
+          <p class="text-[10px] font-mono text-slate-400 uppercase whitespace-nowrap">MITRE ATT&amp;CK</p>
+          <p class="text-xs font-semibold text-blue-400 mt-0.5 font-mono whitespace-nowrap" id="meta-mitre">T1110.001 • Brute Force</p>
+        </div>
+      </div>
+
+      <!-- Evidence & Timeline + Response Box Split (Inner 2 Columns) -->
+      <div class="grid grid-cols-1 xl:grid-cols-12 gap-3 flex-1 min-h-0 items-stretch mt-1.5 overflow-hidden">
+        <!-- Evidence & Timeline (xl:col-span-7) -->
+        <div class="xl:col-span-7 flex flex-col justify-between space-y-1.5 overflow-hidden min-h-0">
+          <div class="min-h-0 flex-1 flex flex-col">
+            <h4 class="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5 mb-1.5 whitespace-nowrap flex-shrink-0">
+              <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+              Bằng chứng &amp; dòng thời gian điều tra
+            </h4>
+            <!-- Timeline Events -->
+            <ol class="relative border-l border-soc-border ml-2 space-y-2 text-xs overflow-y-auto max-h-[105px] pr-1" id="timeline-list">
+              <li class="pl-3.5 relative">
+                <span class="absolute -left-1 top-1 w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-soc-card"></span>
+                <span class="font-mono text-slate-400 font-semibold text-[10.5px]">10:42:18</span>
+                <p class="text-slate-300 text-[11px] mt-0.5">Wazuh SIEM tạo Alert <span class="font-mono text-amber-400 font-bold">Rule 5712</span>, mức 10 (Critical threshold exceeded)</p>
+              </li>
+              <li class="pl-3.5 relative">
+                <span class="absolute -left-1 top-1 w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-soc-card"></span>
+                <span class="font-mono text-slate-400 font-semibold text-[10.5px]">10:42:19</span>
+                <p class="text-slate-300 text-[11px] mt-0.5">Webhook Receiver tiếp nhận gói tin an toàn có xác thực token <span class="text-blue-300 font-mono">X-SOC-Token</span></p>
+              </li>
+              <li class="pl-3.5 relative">
+                <span class="absolute -left-1 top-1 w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-soc-card"></span>
+                <span class="font-mono text-slate-400 font-semibold text-[10.5px]">10:42:20</span>
+                <p class="text-slate-300 text-[11px] mt-0.5">Agent gọi <span class="text-emerald-400 font-mono">query_wazuh_history</span>: <span class="text-rose-400 font-bold">9 thất bại</span>, 0 thành công từ IP trong 24h</p>
+              </li>
+            </ol>
+          </div>
+
+          <!-- Raw Log Snippet Code Block -->
+          <div class="flex-shrink-0">
+            <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 bg-soc-surface px-2.5 py-1 rounded-t border-t border-x border-soc-border whitespace-nowrap">
+              <span>Trích xuất Raw Syslog / Wazuh full_log</span>
+              <span class="text-[9.5px] text-emerald-400 badge-pill">Format: syslog</span>
+            </div>
+            <pre class="bg-black/60 p-2 rounded-b border border-soc-border font-mono text-[11px] text-rose-300/90 overflow-x-auto whitespace-nowrap select-text"><code id="raw-log-block">Oct 24 10:42:18 ubuntu-lab sshd[28491]: Failed password for invalid user admin from 192.168.56.102 port 4440 ssh2</code></pre>
+          </div>
+        </div>
+
+        <!-- Proposed Response Action (xl:col-span-5) - CẢI TIẾN: Cho phép cuộn trơn tru, không bao giờ bị cắt nút -->
+        <div class="xl:col-span-5 bg-soc-surface/70 border border-soc-border rounded-lg p-2.5 flex flex-col justify-between min-h-0 overflow-hidden shadow-inner">
+          <!-- Scrollable Body for Proposed Action -->
+          <div class="overflow-y-auto min-h-0 flex-1 pr-1 space-y-1.5" id="response-action-scrollable">
+            <div class="flex items-center justify-between gap-2 flex-shrink-0">
+              <h4 class="text-[11px] font-bold text-white tracking-wide uppercase flex items-center gap-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M20.618 5.984A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+                Đề xuất phản ứng
+              </h4>
+              <span class="text-[9.5px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.5 rounded font-mono badge-pill" id="response-proposal-badge">Cần phê duyệt</span>
+            </div>
+            <p class="text-[11px] text-slate-300 mt-1 leading-relaxed" id="response-proposal-text">
+              Chặn IP nguồn trên UFW trong 15 phút. Policy Engine đã kiểm tra whitelist và giới hạn tốc độ; cần analyst phê duyệt.
+            </p>
+            <!-- Policy Verification Checkmarks -->
+            <div class="mt-2 space-y-1 font-mono text-[10.5px]" id="response-checks-list">
+              <div class="flex items-center gap-1.5 text-emerald-400">
+                <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+                <span>IP 192.168.56.102 không nằm trong whitelist bảo vệ (192.168.56.1, .101)</span>
+              </div>
+              <div class="flex items-center gap-1.5 text-emerald-400">
+                <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+                <span>Giới hạn tần suất: 2 / 5 lần cách ly mỗi giờ (Rate Limiting)</span>
+              </div>
+              <div class="flex items-center gap-1.5 text-emerald-400">
+                <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+                <span>Cơ chế Active Defense UFW: Tự động gỡ sau TTL 15 phút</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons (Pinned at Bottom, Always Visible) -->
+          <div class="pt-2 border-t border-soc-border/60 space-y-1.5 flex-shrink-0">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button class="w-full bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-medium py-1.5 px-2 rounded text-xs transition duration-150 flex items-center justify-center gap-1 shadow-md shadow-rose-950/40 cursor-pointer badge-pill" id="btn-approve-block">
+                <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+                <span id="btn-primary-text">Phê duyệt chặn UFW 15 phút</span>
+              </button>
+              <button class="w-full bg-soc-card hover:bg-soc-border text-slate-300 border border-soc-border font-medium py-1.5 px-2 rounded text-xs transition duration-150 text-center cursor-pointer badge-pill" id="btn-mark-review">
+                <span id="btn-secondary-text">Đánh dấu cần xem lại</span>
+              </button>
+            </div>
+            <p class="text-[9.5px] text-slate-400 text-center italic whitespace-nowrap" id="response-disclaimer">
+              Thực thi qua wrapper an toàn /usr/local/sbin/soc-block • Giám sát TTL tự động.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+    <!-- END: InvestigationDetailColumn -->
+  </div>
+  <!-- END: PrimaryDashboardGrid -->
+
+  <!-- BEGIN: LiveLogStreamTerminal -->
+  <section class="bg-soc-surface border border-soc-border rounded-lg overflow-hidden shadow-lg flex flex-col flex-shrink-0" data-purpose="live-terminal">
+    <!-- Terminal Header Controls -->
+    <div class="bg-soc-card px-3 py-1.5 border-b border-soc-border flex items-center justify-between gap-3 flex-shrink-0">
+      <div class="flex items-center gap-2 whitespace-nowrap shrink-0">
+        <div class="flex items-center gap-1">
+          <span class="w-2.5 h-2.5 rounded-full bg-rose-500/80"></span>
+          <span class="w-2.5 h-2.5 rounded-full bg-amber-500/80"></span>
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/80"></span>
+        </div>
+        <span class="text-xs font-bold text-white font-mono flex items-center gap-2">
+          Wazuh Realtime Log Stream / Live SOC Terminal
+          <span class="text-[9.5px] px-1.5 py-0.2 rounded bg-soc-surface text-emerald-400 border border-emerald-500/30 font-normal badge-pill">STREAMING ACTIVE</span>
+        </span>
+      </div>
+      
+      <!-- Terminal Controls -->
+      <div class="flex items-center gap-3 text-xs font-mono whitespace-nowrap shrink-0">
+        <div class="flex items-center gap-1 text-slate-400">
+          <span>Level:</span>
+          <span class="text-slate-200 font-semibold cursor-pointer" id="log-level-display">ALL (Mọi cấp độ)</span>
+        </div>
+        <button class="px-2.5 py-1 rounded bg-soc-surface hover:bg-soc-border text-slate-300 border border-soc-border text-[10.5px] flex items-center gap-1.5 cursor-pointer font-mono badge-pill transition" id="toggle-autoscroll">
+          <span>Cuộn tự động:</span>
+          <span class="text-emerald-400 font-bold" id="autoscroll-status">BẬT</span>
+        </button>
+        <button class="px-2.5 py-1 rounded bg-soc-surface hover:bg-soc-border text-slate-400 hover:text-white border border-soc-border text-[10.5px] transition cursor-pointer font-mono badge-pill" id="clear-terminal-btn">
+          Xóa màn hình
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Terminal Output Area -->
+    <div class="p-2.5 bg-black/90 font-mono text-[11px] leading-relaxed h-[130px] overflow-y-auto space-y-1 border-t border-black select-text" id="terminal-output">
+      <div class="flex items-start gap-2 text-slate-400"><span class="text-slate-400">[10:42:01]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Agent-001]</span><span>wazuh-agent: Keep-alive ping acknowledged from Manager 192.168.56.101 (latency 1.4ms)</span></div>
+      <div class="flex items-start gap-2 text-slate-300"><span class="text-slate-400">[10:42:04]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Agent-001]</span><span>syscheck: Integrity checksum database synced for /etc /bin /usr/bin (3,412 files monitored)</span></div>
+      <div class="flex items-start gap-2 text-slate-300"><span class="text-slate-400">[10:42:08]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Suricata-IDS]</span><span>suricata: Inbound stream inspection active on eth0 (192.168.56.0/24 Promiscuous mode)</span></div>
+      <div class="flex items-start gap-2 text-slate-300"><span class="text-slate-400">[10:42:10]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28480]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.56.102</span></div>
+      <div class="flex items-start gap-2 text-slate-300"><span class="text-slate-400">[10:42:12]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28485]: Connection closed by authenticating user root 192.168.56.102 port 4438 [preauth]</span></div>
+      <div class="flex items-start gap-2 text-slate-300"><span class="text-slate-400">[10:42:15]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28489]: Failed password for invalid user admin from 192.168.56.102 port 4440 ssh2</span></div>
+      <div class="flex items-start gap-2 text-rose-300 bg-rose-950/20 px-1 py-0.5 rounded border border-rose-900/30"><span class="text-slate-400">[10:42:18]</span><span class="text-rose-400 font-bold">[CRIT]</span><span class="text-rose-300">[Agent-001]</span><span class="text-rose-200 font-semibold">Rule 5712 (Level 10): sshd: Multiple SSH authentication failures occurred within 2 mins from IP 192.168.56.102!</span></div>
+      <div class="flex items-start gap-2 text-slate-300"><span class="text-slate-400">[10:42:19]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Active-Response]</span><span>Deterministic Policy Engine: IP 192.168.56.102 verified against protected whitelist. Staging /usr/local/sbin/soc-block drop</span></div>
+      <div class="flex items-start gap-2 text-emerald-400"><span class="text-slate-400">[10:42:20]</span><span class="text-emerald-400 font-semibold">[ARCHIVE]</span><span class="text-slate-400">[Wazuh-Indexer]</span><span>query_wazuh_history complete: 9 failed attempts recorded, 0 successful sessions in 24h</span></div>
+    </div>
+
+    <!-- Terminal Command Quick Bar -->
+    <div class="px-3 py-1.5 bg-soc-card/90 border-t border-soc-border flex items-center justify-between gap-2 text-[10.5px] text-slate-400 font-mono flex-shrink-0">
+      <div class="flex items-center gap-2 flex-1 min-w-[280px]">
+        <span class="text-emerald-400 flex items-center gap-1 font-semibold shrink-0 whitespace-nowrap">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>wazuh-control&gt;
+        </span>
+        <div class="relative flex-1 max-w-lg">
+          <input type="text" placeholder="grep -E 'Rule 5712|sshd|drop|sudo' hoặc gõ lệnh trinh sát..." class="w-full bg-soc-surface/80 border border-soc-border rounded px-2.5 py-0.5 text-xs text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-soc-accentBlue">
+        </div>
+      </div>
+      <div class="flex items-center gap-3 text-slate-400 text-[10px] shrink-0 whitespace-nowrap">
+        <span class="px-1.5 py-0.5 rounded bg-soc-surface border border-soc-border text-slate-300">Buffer: <span class="text-emerald-400 font-bold">250/250</span> entries</span>
+        <span class="px-1.5 py-0.5 rounded bg-soc-surface border border-soc-border text-slate-300">Độ trễ SIEM: <span class="text-blue-400 font-bold">1.4ms</span></span>
+        <span class="hidden sm:inline text-slate-500">Nhấn <kbd class="text-slate-300 bg-slate-800 px-1 rounded text-[9px]">Ctrl+C</kbd> để tạm dừng</span>
+      </div>
+    </div>
+  </section>
+  <!-- END: LiveLogStreamTerminal -->
+
+</main>
+<!-- END: MainContent -->
+
+<!-- BEGIN: NotificationToast -->
+<aside class="fixed bottom-4 right-4 z-50 transform translate-y-24 opacity-0 transition-all duration-300 ease-out pointer-events-none" id="toast-notification">
+  <div class="bg-soc-card border border-soc-border rounded-lg shadow-2xl p-3 max-w-sm flex items-start gap-2.5">
+    <div class="w-7 h-7 rounded-full flex items-center justify-center shrink-0" id="toast-icon-wrapper">
+    </div>
+    <div>
+      <h4 class="text-xs font-bold text-white uppercase font-mono" id="toast-title">Thông báo SOC</h4>
+      <p class="text-xs text-slate-300 mt-0.5 leading-snug" id="toast-message">Lệnh phản ứng đã được thực thi.</p>
+    </div>
+  </div>
+</aside>
+<!-- END: NotificationToast -->
+
+<!-- BEGIN: InteractiveScripts -->
+<script data-purpose="incident-management">
+  const INCIDENT_DATABASE = {
+    'INC-2026-0042': {
+      title: 'SSH brute force',
+      severity: 'CAO',
+      severityClass: 'bg-rose-950 text-rose-400 border-rose-700',
+      meta: 'INC-2026-0042 • Rule 5712 (Level 10) • Wazuh alert 1730972538.081',
+      aiTitle: 'KẾT LUẬN ĐIỀU TRA AI SOC AGENT',
+      aiModelBadge: 'Ollama ReAct',
+      aiVerdictBadge: '🚨 NGUY HIỂM (Malicious)',
+      aiVerdictClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      aiSummary: 'Tác tử AI thực hiện chu trình ReAct: Phát hiện chuỗi 9 lần nhập sai mật khẩu SSH dồn dập từ IP 192.168.56.102 trong 2 phút (Wazuh Rule 5712, Level 10). Truy vấn chỉ đọc kho lưu trữ Wazuh Archives xác nhận 0 phiên đăng nhập thành công trong 24h qua. Kết luận: Tấn công dò mật khẩu (Brute Force). Đề xuất thẩm định Policy và cách ly IP tạm thời qua UFW.',
+      endpoint: 'Ubuntu-Server (ubuntu-lab) • 001',
+      srcIp: '192.168.56.102',
+      ipLabel: 'RFC1918 (Attacker)',
+      account: 'admin / root',
+      mitre: 'T1110.001 • Brute Force',
+      timeline: [
+        { time: '10:42:18', desc: 'Wazuh SIEM tạo Alert Rule 5712, Cấp độ 10 (Vượt ngưỡng thất bại liên tiếp)', high: 'Rule 5712' },
+        { time: '10:42:19', desc: 'Webhook Receiver tiếp nhận gói tin an toàn có xác thực token X-SOC-Token', high: 'X-SOC-Token' },
+        { time: '10:42:20', desc: 'Agent gọi query_wazuh_history: 9 thất bại, 0 thành công từ IP 192.168.56.102', high: 'query_wazuh_history' }
+      ],
+      rawLog: 'Oct 24 10:42:18 ubuntu-lab sshd[28491]: Failed password for invalid user admin from 192.168.56.102 port 4440 ssh2',
+      proposalBadge: 'Cần phê duyệt UFW',
+      proposal: 'Chặn IP nguồn 192.168.56.102 trên UFW trong 15 phút. Policy Engine đã kiểm tra danh sách bảo vệ và hạn ngạch; sẵn sàng kích hoạt lệnh phản ứng.',
+      checks: [
+        'IP 192.168.56.102 không nằm trong whitelist bảo vệ (192.168.56.1, .101)',
+        'Giới hạn tần suất: 2 / 5 lần cách ly mỗi giờ (Rate Limiting)',
+        'Cơ chế Active Defense UFW: Tự động gỡ sau TTL 15 phút'
+      ],
+      primaryBtnText: 'Phê duyệt chặn UFW 15 phút',
+      secondaryBtnText: 'Đánh dấu cần xem lại',
+      disclaimer: 'Thực thi qua wrapper an toàn /usr/local/sbin/soc-block • Giám sát TTL tự động.'
+    },
+    'INC-2026-0041': {
+      title: 'Sudo bất thường',
+      severity: 'TRUNG BÌNH',
+      severityClass: 'bg-amber-950 text-amber-400 border-amber-700',
+      meta: 'INC-2026-0041 • Rule 5402 (Level 6) • Wazuh alert 1730971867.054',
+      aiTitle: 'KẾT LUẬN ĐIỀU TRA AI SOC AGENT',
+      aiModelBadge: 'Ollama ReAct',
+      aiVerdictBadge: '⚠️ KHẢ NGHI (Suspicious)',
+      aiVerdictClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      aiSummary: 'Tác tử AI phân tích telemetry: Người dùng "deploy" thực thi lệnh nguy hiểm "sudo su -" để leo thang quyền root ngoài giờ làm việc. Đối chiếu hồ sơ quyền hạn config/baseline.json, tài khoản CI/CD này chỉ được phép chạy "sudo /usr/sbin/service nginx restart". Cảnh báo leo thang đặc quyền trái phép (Rule 5402).',
+      endpoint: 'Ubuntu-Server (ubuntu-lab) • 001',
+      srcIp: '192.168.56.101',
+      ipLabel: 'Local/Host',
+      account: 'deploy',
+      mitre: 'T1548.003 • Abuse Elevation: Sudo',
+      timeline: [
+        { time: '10:31:00', desc: 'User deploy thực thi lệnh nâng quyền root qua sudo', high: 'sudo su -' },
+        { time: '10:31:07', desc: 'Wazuh Rule 5402 phát hiện vi phạm chính sách sudoers hợp lệ', high: 'Rule 5402' }
+      ],
+      rawLog: 'Oct 24 10:31:07 ubuntu-lab sudo[6412]: deploy : 1 incorrect password attempt ; TTY=pts/1 ; PWD=/home/deploy ; USER=root ; COMMAND=/bin/su -',
+      proposalBadge: 'Cần xem xét phiên',
+      proposal: 'Thu hồi phiên sudo của tài khoản deploy và tạm khóa quyền leo thang root để đối soát access key.',
+      checks: [
+        'Tài khoản deploy thuộc danh mục dịch vụ CI/CD trong baseline.json',
+        'Không có yêu cầu bảo trì hạ tầng nào được phê duyệt trước',
+        'Hạn ngạch can thiệp tài khoản: Đạt chuẩn an toàn chính sách'
+      ],
+      primaryBtnText: 'Tạm khóa quyền Sudo',
+      secondaryBtnText: 'Bỏ qua cảnh báo',
+      disclaimer: 'Đối soát hồ sơ phân quyền sudoers tại /etc/sudoers.d/deploy-limits'
+    },
+    'INC-2026-0039': {
+      title: 'Tệp cấu hình thay đổi',
+      severity: 'THẤP',
+      severityClass: 'bg-blue-950 text-blue-400 border-blue-700',
+      meta: 'INC-2026-0039 • Rule 550 (Level 7) • Wazuh FIM 1730969924.011',
+      aiTitle: 'KẾT LUẬN ĐIỀU TRA AI SOC AGENT',
+      aiModelBadge: 'Wazuh FIM',
+      aiVerdictBadge: 'ℹ️ THAY ĐỔI CẤU HÌNH (Informational)',
+      aiVerdictClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+      aiSummary: 'Mô-đun Syscheck / FIM phát hiện mã băm SHA256 và kích thước tệp /etc/ssh/sshd_config bị thay đổi lúc 09:58:44. Đối chiếu lịch bảo trì Ansible, không có Pull Request hạ tầng được phê duyệt trong khung giờ này. Cần đối soát tệp cấu hình baseline.',
+      endpoint: 'Ubuntu-Server (ubuntu-lab) • 001',
+      srcIp: '/etc/ssh/sshd_config',
+      ipLabel: 'FIM Target',
+      account: 'root (ansible)',
+      mitre: 'T1565 • Data Manipulation',
+      timeline: [
+        { time: '09:58:40', desc: 'Syscheck phát hiện thay đổi mã băm sha256 của tệp cấu hình /etc/ssh/sshd_config', high: 'FIM Checksum' },
+        { time: '09:58:44', desc: 'Wazuh Rule 550 ghi nhận sự kiện sửa đổi tập tin hệ thống nhạy cảm', high: 'Rule 550' }
+      ],
+      rawLog: 'Oct 24 09:58:44 ubuntu-lab ossec: File \'/etc/ssh/sshd_config\' checksum changed from old_sha256 to new_sha256',
+      proposalBadge: 'Kiểm toán FIM',
+      proposal: 'So sánh diff tệp sshd_config với bản sao lưu baseline và xác nhận thay đổi an ninh.',
+      checks: [
+        'Tệp thuộc danh mục giám sát tính toàn vẹn FIM',
+        'Không phát hiện tiến trình backdoor chạy ngầm',
+        'Có sẵn bản sao lưu cấu hình chuẩn tại /etc/ssh/sshd_config.orig'
+      ],
+      primaryBtnText: 'Khôi phục cấu hình baseline',
+      secondaryBtnText: 'Chấp thuận thay đổi',
+      disclaimer: 'Thực hiện đối chiếu checksum với kho lưu trữ cấu hình Git / Ansible'
+    },
+    'INC-2026-0038': {
+      title: 'Tạo tài khoản lạ ngoài Baseline',
+      severity: 'CAO',
+      severityClass: 'bg-rose-950 text-rose-400 border-rose-700',
+      meta: 'INC-2026-0038 • Rule 5902 (Level 9) • Wazuh alert 1730968872.032',
+      aiTitle: 'KẾT LUẬN ĐIỀU TRA AI SOC AGENT',
+      aiModelBadge: 'Ollama ReAct',
+      aiVerdictBadge: '🚨 NGUY HIỂM (Malicious)',
+      aiVerdictClass: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      aiSummary: 'Hệ thống ghi nhận sự kiện tài khoản "evil_backdoor" được khởi tạo và gán vào nhóm sudo (Wazuh Rule 5902). Đối chiếu file cấu hình chuẩn config/baseline.json phát hiện tài khoản hoàn toàn nằm ngoài danh mục quản trị viên hợp lệ. Hành vi thiết lập cửa sau (Persistence). Đề xuất thu hồi quyền và xóa user ngay lập tức.',
+      endpoint: 'Ubuntu-Server (ubuntu-lab) • 001',
+      srcIp: '192.168.56.102',
+      ipLabel: 'RFC1918',
+      account: 'evil_backdoor',
+      mitre: 'T1136.001 • Create Account: Local',
+      timeline: [
+        { time: '09:41:00', desc: 'Tiến trình useradd khởi tạo tài khoản mới: evil_backdoor', high: 'useradd' },
+        { time: '09:41:12', desc: 'Wazuh Rule 5902 phát hiện tài khoản không nằm trong config/baseline.json được cấp quyền sudo', high: 'Rule 5902' }
+      ],
+      rawLog: 'Oct 24 09:41:12 ubuntu-lab useradd[14205]: new user: name=evil_backdoor, UID=1003, GID=1003, home=/home/evil_backdoor',
+      proposalBadge: 'Cần phản ứng ngay',
+      proposal: 'Thu hồi quyền sudo và khóa tài khoản trái phép evil_backdoor khỏi máy chủ Linux ngay lập tức.',
+      checks: [
+        'Tài khoản evil_backdoor không có trong config/baseline.json được phê duyệt',
+        'Phát hiện hành vi Persistence leo thang quyền quản trị trái phép',
+        'Kích hoạt khóa tức thời qua usermod -L và thu hồi quyền sudo'
+      ],
+      primaryBtnText: 'Khóa tài khoản evil_backdoor',
+      secondaryBtnText: 'Đánh dấu điều tra sâu',
+      disclaimer: 'Thực thi kiểm toán tài khoản và bảo vệ file cấu hình /etc/passwd'
+    }
+  };
+
+  document.querySelectorAll('.incident-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const incidentId = card.getAttribute('data-incident');
+      const data = INCIDENT_DATABASE[incidentId];
+      if (!data) return;
+
+      document.querySelectorAll('.incident-card').forEach(c => {
+        c.classList.remove('selected-incident-border', 'bg-soc-cardHover');
+        c.classList.add('bg-soc-surface/50');
+      });
+      card.classList.add('selected-incident-border', 'bg-soc-cardHover');
+      card.classList.remove('bg-soc-surface/50');
+
+      document.getElementById('detail-title').textContent = data.title;
+      const sevBadge = document.getElementById('detail-severity');
+      sevBadge.textContent = data.severity;
+      sevBadge.className = `text-[10px] font-bold px-2 py-0.5 rounded font-mono tracking-wider badge-pill ${data.severityClass}`;
+      document.getElementById('detail-meta').textContent = data.meta;
+      
+      // Update AI Box
+      document.getElementById('ai-header-title').textContent = data.aiTitle;
+      document.getElementById('ai-model-badge').textContent = data.aiModelBadge;
+      const verdictEl = document.getElementById('ai-verdict-badge');
+      verdictEl.textContent = data.aiVerdictBadge;
+      verdictEl.className = `text-[9.5px] px-2 py-0.5 rounded font-mono font-bold badge-pill ${data.aiVerdictClass}`;
+      document.getElementById('ai-summary-text').textContent = data.aiSummary;
+
+      // Update Metadata
+      document.getElementById('meta-endpoint').textContent = data.endpoint;
+      const srcIpSpan = document.getElementById('meta-src-ip').querySelector('span');
+      srcIpSpan.textContent = data.srcIp;
+      document.getElementById('meta-ip-label').textContent = data.ipLabel;
+      document.getElementById('meta-account').textContent = data.account;
+      document.getElementById('meta-mitre').textContent = data.mitre;
+      document.getElementById('raw-log-block').textContent = data.rawLog;
+
+      // Update Timeline
+      const timelineOl = document.getElementById('timeline-list');
+      timelineOl.innerHTML = '';
+      data.timeline.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'pl-3.5 relative';
+        li.innerHTML = `
+          <span class="absolute -left-1 top-1 w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-soc-card"></span>
+          <span class="font-mono text-slate-400 font-semibold text-[10.5px]">${item.time}</span>
+          <p class="text-slate-300 text-[11px] mt-0.5">${item.desc}</p>
+        `;
+        timelineOl.appendChild(li);
+      });
+
+      // Update Proposed Action
+      document.getElementById('response-proposal-badge').textContent = data.proposalBadge;
+      document.getElementById('response-proposal-text').textContent = data.proposal;
+      
+      const checksDiv = document.getElementById('response-checks-list');
+      checksDiv.innerHTML = '';
+      data.checks.forEach(chk => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-1.5 text-emerald-400';
+        row.innerHTML = `
+          <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          <span>${chk}</span>
+        `;
+        checksDiv.appendChild(row);
+      });
+
+      document.getElementById('btn-primary-text').textContent = data.primaryBtnText;
+      document.getElementById('btn-secondary-text').textContent = data.secondaryBtnText;
+      document.getElementById('response-disclaimer').textContent = data.disclaimer;
+
+      // Reset scroll position of proposed response box so it's always at top
+      const scrollable = document.getElementById('response-action-scrollable');
+      if (scrollable) scrollable.scrollTop = 0;
+    });
+  });
+</script>
+
+<script data-purpose="actions-and-toasts">
+  const toast = document.getElementById('toast-notification');
+  const toastTitle = document.getElementById('toast-title');
+  const toastMsg = document.getElementById('toast-message');
+  const toastIcon = document.getElementById('toast-icon-wrapper');
+
+  function showNotification(title, message, isSuccess = true) {
+    toastTitle.textContent = title;
+    toastMsg.textContent = message;
+    
+    if (isSuccess) {
+      toastIcon.className = "w-7 h-7 rounded-full bg-emerald-950/80 border border-emerald-500 text-emerald-400 flex items-center justify-center shrink-0";
+      toastIcon.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`;
+    } else {
+      toastIcon.className = "w-7 h-7 rounded-full bg-amber-950/80 border border-amber-500 text-amber-400 flex items-center justify-center shrink-0";
+      toastIcon.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`;
+    }
+
+    toast.classList.remove('translate-y-24', 'opacity-0');
+    toast.classList.add('translate-y-0', 'opacity-100');
+
+    setTimeout(() => {
+      toast.classList.remove('translate-y-0', 'opacity-100');
+      toast.classList.add('translate-y-24', 'opacity-0');
+    }, 3500);
+  }
+
+  document.getElementById('btn-approve-block').addEventListener('click', () => {
+    const curTitle = document.getElementById('btn-primary-text').textContent;
+    showNotification('THỰC THI PHẢN ỨNG TÁC CHIẾN', `Đã gửi chỉ thị phản ứng: "${curTitle}". Lệnh đã chuyển qua Policy Engine an toàn.`, true);
+  });
+
+  document.getElementById('btn-mark-review').addEventListener('click', () => {
+    showNotification('CẬP NHẬT TRẠNG THÁI', 'Sự cố được chuyển sang trạng thái "Under Analyst Review" để đối soát thêm chứng cứ.', false);
+  });
+
+  document.getElementById('btn-copy-ioc').addEventListener('click', () => {
+    const ip = document.getElementById('meta-src-ip').querySelector('span').textContent;
+    navigator.clipboard?.writeText(ip);
+    showNotification('ĐÃ SAO CHÉP IOC', `Đã lưu chỉ số IOC (${ip}) vào bộ nhớ tạm.`, true);
+  });
+
+  document.getElementById('live-mode-toggle').addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    btn.classList.toggle('ring-1');
+    btn.classList.toggle('ring-rose-500');
+    showNotification('CHẾ ĐỘ TRỰC CA', 'Đã chuyển đổi trạng thái phiên trực SOC Tier-1 (Live Stream Active).', true);
+  });
+</script>
+
+<script data-purpose="realtime-log-generator">
+  const terminal = document.getElementById('terminal-output');
+  const autoScrollBtn = document.getElementById('toggle-autoscroll');
+  const autoScrollStatus = document.getElementById('autoscroll-status');
+  const clearBtn = document.getElementById('clear-terminal-btn');
+  let autoScroll = true;
+
+  autoScrollBtn.addEventListener('click', () => {
+    autoScroll = !autoScroll;
+    autoScrollStatus.textContent = autoScroll ? 'BẬT' : 'TẮT';
+    autoScrollStatus.className = autoScroll ? 'text-emerald-400 font-bold' : 'text-slate-400 font-bold';
+  });
+
+  clearBtn.addEventListener('click', () => {
+    terminal.innerHTML = '<div class="text-slate-400 text-center italic py-2">[Màn hình ghi nhật ký đã được xóa bởi chuyên viên trực ca]</div>';
+  });
+
+  const sampleRandomLogs = [
+    { level: 'INFO', agent: 'Agent-001', text: 'wazuh-agent: Keep-alive ping acknowledged from Manager 192.168.56.101 (latency 1.4ms)' },
+    { level: 'WARN', agent: 'Agent-001', text: 'auditd: SYSCALL arch=c000003e syscall=59 success=yes exe="/bin/su" comm="su"' },
+    { level: 'INFO', agent: 'Suricata-IDS', text: 'suricata: 0 alerts triggered in the last 60 seconds interval on eth0' },
+    { level: 'WARN', agent: 'Agent-001', text: 'sshd[28495]: Connection closed by authenticating user root 192.168.56.102 [preauth]' },
+    { level: 'CRIT', agent: 'Agent-001', text: 'Rule 5712: Repeated failed authentications threshold exceeded on IP 192.168.56.102' },
+    { level: 'INFO', agent: 'Active-Response', text: 'UFW Wrapper: /usr/local/sbin/soc-block check_ip 192.168.56.102 passed whitelist guardrail' }
+  ];
+
+  setInterval(() => {
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+    const log = sampleRandomLogs[Math.floor(Math.random() * sampleRandomLogs.length)];
+    
+    let badgeClass = 'text-blue-400 font-semibold';
+    let rowClass = 'text-slate-300';
+    if (log.level === 'WARN') {
+      badgeClass = 'text-amber-400 font-semibold';
+    } else if (log.level === 'CRIT') {
+      badgeClass = 'text-rose-400 font-bold';
+      rowClass = 'text-rose-200 bg-rose-950/20 px-1 py-0.5 rounded border border-rose-900/30';
+    }
+
+    const logRow = document.createElement('div');
+    logRow.className = `flex items-start gap-2 ${rowClass}`;
+    logRow.innerHTML = `
+      <span class="text-slate-400 font-mono">[${timeStr}]</span>
+      <span class="${badgeClass}">[${log.level}]</span>
+      <span class="text-slate-400 font-mono">[${log.agent}]</span>
+      <span class="font-mono text-slate-300">${log.text}</span>
+    `;
+
+    terminal.appendChild(logRow);
+
+    if (terminal.children.length > 80) {
+      terminal.removeChild(terminal.firstElementChild);
+    }
+
+    if (autoScroll) {
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+  }, 4500);
+
+  setInterval(() => {
+    const timeEl = document.getElementById('last-sync-time');
+    if (timeEl) {
+      const d = new Date();
+      timeEl.textContent = `Cập nhật: ${d.toTimeString().split(' ')[0]}`;
+    }
+  }, 1000);
+</script>
+<!-- END: InteractiveScripts -->
+
+</body>
+</html>

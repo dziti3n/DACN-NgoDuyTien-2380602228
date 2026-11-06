@@ -20,6 +20,24 @@ from core.policy_engine import (
     get_expired_blocks,
     DEFAULT_BLOCK_TTL_MINUTES,
 )
+from core.schema import (
+    SeverityLevel,
+    IncidentStatus,
+    LogLevel,
+    TimelineEvent,
+    ProposedAction,
+    Incident,
+    LogEntry,
+    map_to_severity_level,
+    get_severity_badge,
+    get_status_badge,
+    get_log_level_badge,
+    parse_log_entry,
+    build_incident_from_alert,
+    get_default_incidents,
+    DEFAULT_TERMINAL_LOGS,
+    get_default_terminal_logs,
+)
 
 __all__ = [
     "investigate",
@@ -34,5 +52,21 @@ __all__ = [
     "load_active_blocks",
     "get_expired_blocks",
     "DEFAULT_BLOCK_TTL_MINUTES",
+    "SeverityLevel",
+    "IncidentStatus",
+    "LogLevel",
+    "TimelineEvent",
+    "ProposedAction",
+    "Incident",
+    "LogEntry",
+    "map_to_severity_level",
+    "get_severity_badge",
+    "get_status_badge",
+    "get_log_level_badge",
+    "parse_log_entry",
+    "build_incident_from_alert",
+    "get_default_incidents",
+    "DEFAULT_TERMINAL_LOGS",
+    "get_default_terminal_logs",
 ]
 
