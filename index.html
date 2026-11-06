@@ -55,13 +55,30 @@
       font-family: 'JetBrains Mono', monospace;
     }
 
-    /* Force pills and badges to never break or wrap letters */
+    /* Force pills and badges to never break or wrap letters and stay vertically centered */
     .badge-pill {
       white-space: nowrap !important;
       word-break: keep-all !important;
       flex-shrink: 0 !important;
       min-width: max-content !important;
-      display: inline-block !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      vertical-align: middle !important;
+    }
+
+    /* Animation for newest log appearing at the top */
+    @keyframes log-slide-down {
+      from {
+        opacity: 0;
+        transform: translateY(-5px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .log-new-entry {
+      animation: log-slide-down 0.25s ease-out;
     }
 
     /* Terminal Fullscreen / Maximized Mode */
@@ -175,20 +192,20 @@
 
     <!-- Live Status & Toolbar Actions -->
     <div class="flex items-center gap-2 whitespace-nowrap shrink-0">
-      <!-- Wazuh Connection Badge -->
-      <div class="flex items-center space-x-1.5 bg-emerald-950/40 border border-emerald-500/40 text-emerald-400 px-2 py-0.5 rounded-full text-[10.5px] font-mono badge-pill">
-        <span class="relative flex h-1.5 w-1.5">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500 glow-green"></span>
+      <!-- Wazuh Connection Badge (Aligned Vertically) -->
+      <div class="inline-flex items-center gap-1.5 bg-emerald-950/40 border border-emerald-500/40 text-emerald-400 px-2.5 py-0.5 rounded-full text-[10.5px] font-mono badge-pill shadow-sm">
+        <span class="relative flex h-2 w-2 shrink-0 items-center justify-center self-center">
+          <span class="animate-ping absolute inset-0 rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-block h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.9)]"></span>
         </span>
-        <span>Wazuh 4.9.2 (192.168.56.101)</span>
+        <span class="leading-none self-center">Wazuh 4.9.2 • Đang kết nối (192.168.56.101)</span>
       </div>
       <!-- Timestamp Indicator -->
       <span class="text-[10.5px] font-mono text-slate-400 bg-soc-card px-2 py-0.5 rounded border border-soc-border badge-pill" id="last-sync-time">Cập nhật: 10:45:29</span>
       <!-- Live Duty Mode Button -->
-      <button class="flex items-center gap-1.5 bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-600/40 px-2 py-0.5 rounded text-[10.5px] font-medium transition cursor-pointer badge-pill" id="live-mode-toggle">
-        <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-        <span>Chế độ trực ca (Live)</span>
+      <button class="inline-flex items-center gap-1.5 bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-600/40 px-2.5 py-0.5 rounded text-[10.5px] font-medium transition cursor-pointer badge-pill" id="live-mode-toggle">
+        <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.8)] shrink-0 self-center"></span>
+        <span class="leading-none self-center">Chế độ trực ca (Live)</span>
       </button>
     </div>
   </div>
@@ -548,17 +565,17 @@
       </div>
     </div>
 
-    <!-- Live Terminal Output Area (Default docked height: 88px, Fullscreen height: 100vh) -->
+    <!-- Live Terminal Output Area (Newest logs on TOP, Reverse Chronological) -->
     <div class="p-2 bg-black/90 font-mono text-[10.5px] leading-relaxed h-[88px] overflow-y-auto space-y-1 border-t border-black select-text" id="terminal-output">
-      <div class="log-row flex items-start gap-2 text-slate-400" data-level="INFO"><span class="text-slate-400">[10:42:01]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Agent-001]</span><span>wazuh-agent: Keep-alive ping acknowledged from Manager 192.168.56.101 (latency 1.4ms)</span></div>
-      <div class="log-row flex items-start gap-2 text-slate-300" data-level="INFO"><span class="text-slate-400">[10:42:04]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Agent-001]</span><span>syscheck: Integrity checksum database synced for /etc /bin /usr/bin (3,412 files monitored)</span></div>
-      <div class="log-row flex items-start gap-2 text-slate-300" data-level="INFO"><span class="text-slate-400">[10:42:08]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Suricata-IDS]</span><span>suricata: Inbound stream inspection active on eth0 (192.168.56.0/24 Promiscuous mode)</span></div>
-      <div class="log-row flex items-start gap-2 text-slate-300" data-level="WARN"><span class="text-slate-400">[10:42:10]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28480]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.56.102</span></div>
-      <div class="log-row flex items-start gap-2 text-slate-300" data-level="WARN"><span class="text-slate-400">[10:42:12]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28485]: Connection closed by authenticating user root 192.168.56.102 port 4438 [preauth]</span></div>
-      <div class="log-row flex items-start gap-2 text-slate-300" data-level="WARN"><span class="text-slate-400">[10:42:15]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28489]: Failed password for invalid user admin from 192.168.56.102 port 4440 ssh2</span></div>
-      <div class="log-row flex items-start gap-2 text-rose-300 bg-rose-950/20 px-1 py-0.5 rounded border border-rose-900/30" data-level="CRIT"><span class="text-slate-400">[10:42:18]</span><span class="text-rose-400 font-bold">[CRIT]</span><span class="text-rose-300">[Agent-001]</span><span class="text-rose-200 font-semibold">Rule 5712 (Level 10): sshd: Multiple SSH authentication failures occurred within 2 mins from IP 192.168.56.102!</span></div>
-      <div class="log-row flex items-start gap-2 text-slate-300" data-level="INFO"><span class="text-slate-400">[10:42:19]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Active-Response]</span><span>Deterministic Policy Engine: IP 192.168.56.102 verified against protected whitelist. Staging /usr/local/sbin/soc-block drop</span></div>
       <div class="log-row flex items-start gap-2 text-emerald-400" data-level="ARCHIVE"><span class="text-slate-400">[10:42:20]</span><span class="text-emerald-400 font-semibold">[ARCHIVE]</span><span class="text-slate-400">[Wazuh-Indexer]</span><span>query_wazuh_history complete: 9 failed attempts recorded, 0 successful sessions in 24h</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-300" data-level="INFO"><span class="text-slate-400">[10:42:19]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Active-Response]</span><span>Deterministic Policy Engine: IP 192.168.56.102 verified against protected whitelist. Staging /usr/local/sbin/soc-block drop</span></div>
+      <div class="log-row flex items-start gap-2 text-rose-300 bg-rose-950/20 px-1 py-0.5 rounded border border-rose-900/30" data-level="CRIT"><span class="text-slate-400">[10:42:18]</span><span class="text-rose-400 font-bold">[CRIT]</span><span class="text-rose-300">[Agent-001]</span><span class="text-rose-200 font-semibold">Rule 5712 (Level 10): sshd: Multiple SSH authentication failures occurred within 2 mins from IP 192.168.56.102!</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-300" data-level="WARN"><span class="text-slate-400">[10:42:15]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28489]: Failed password for invalid user admin from 192.168.56.102 port 4440 ssh2</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-300" data-level="WARN"><span class="text-slate-400">[10:42:12]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28485]: Connection closed by authenticating user root 192.168.56.102 port 4438 [preauth]</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-300" data-level="WARN"><span class="text-slate-400">[10:42:10]</span><span class="text-amber-400 font-semibold">[WARN]</span><span class="text-slate-400">[Agent-001]</span><span>sshd[28480]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.56.102</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-300" data-level="INFO"><span class="text-slate-400">[10:42:08]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Suricata-IDS]</span><span>suricata: Inbound stream inspection active on eth0 (192.168.56.0/24 Promiscuous mode)</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-300" data-level="INFO"><span class="text-slate-400">[10:42:04]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Agent-001]</span><span>syscheck: Integrity checksum database synced for /etc /bin /usr/bin (3,412 files monitored)</span></div>
+      <div class="log-row flex items-start gap-2 text-slate-400" data-level="INFO"><span class="text-slate-400">[10:42:01]</span><span class="text-blue-400 font-semibold">[INFO]</span><span class="text-slate-400">[Agent-001]</span><span>wazuh-agent: Keep-alive ping acknowledged from Manager 192.168.56.101 (latency 1.4ms)</span></div>
     </div>
 
     <!-- Terminal Command Quick Bar -->
@@ -572,6 +589,7 @@
         </div>
       </div>
       <div class="flex items-center gap-3 text-slate-400 text-[9.5px] shrink-0 whitespace-nowrap">
+        <span class="px-1.5 py-0.2 rounded bg-soc-surface border border-soc-border text-slate-300">Thứ tự: <span class="text-blue-400 font-bold">Mới nhất trên đầu</span></span>
         <span class="px-1.5 py-0.2 rounded bg-soc-surface border border-soc-border text-slate-300">Buffer: <span class="text-emerald-400 font-bold" id="log-counter">9/250</span> entries</span>
         <span class="px-1.5 py-0.2 rounded bg-soc-surface border border-soc-border text-slate-300">Độ trễ SIEM: <span class="text-blue-400 font-bold">1.4ms</span></span>
         <span class="hidden sm:inline text-slate-500">Phóng to: <kbd class="text-slate-300 bg-slate-800 px-1 rounded text-[8.5px]">F</kbd> • Thu nhỏ: <kbd class="text-slate-300 bg-slate-800 px-1 rounded text-[8.5px]">Esc</kbd></span>
@@ -881,7 +899,7 @@
       toggleFsBtn.classList.add('text-blue-400', 'border-blue-500/40');
     }
     if (autoScroll) {
-      setTimeout(() => { terminal.scrollTop = terminal.scrollHeight; }, 100);
+      setTimeout(() => { terminal.scrollTop = 0; }, 100);
     }
   }
 
@@ -982,7 +1000,7 @@
     if (counter) counter.textContent = `${visibleCount}/250`;
 
     if (autoScroll) {
-      terminal.scrollTop = terminal.scrollHeight;
+      terminal.scrollTop = 0;
     }
   }
 
@@ -1037,7 +1055,7 @@
     }
 
     const logRow = document.createElement('div');
-    logRow.className = `log-row flex items-start gap-2 ${rowClass}`;
+    logRow.className = `log-row log-new-entry flex items-start gap-2 ${rowClass}`;
     logRow.setAttribute('data-level', log.level);
     logRow.innerHTML = `
       <span class="text-slate-400 font-mono">[${timeStr}]</span>
@@ -1057,10 +1075,12 @@
       logRow.style.display = 'none';
     }
 
-    terminal.appendChild(logRow);
+    // THỨ TỰ MỚI NHẤT TRÊN ĐẦU: Chèn dòng log mới nhất vào vị trí đầu tiên
+    terminal.insertBefore(logRow, terminal.firstChild);
 
+    // Xóa dòng log cũ nhất ở cuối danh sách nếu danh sách vượt quá 80 dòng
     if (terminal.children.length > 80) {
-      terminal.removeChild(terminal.firstElementChild);
+      terminal.removeChild(terminal.lastElementChild);
     }
 
     const counter = document.getElementById('log-counter');
@@ -1069,8 +1089,9 @@
       counter.textContent = `${vis}/250`;
     }
 
+    // Giữ màn hình ở dòng mới nhất trên đầu khi bật tự động cuộn
     if (autoScroll && shouldShow) {
-      terminal.scrollTop = terminal.scrollHeight;
+      terminal.scrollTop = 0;
     }
   }, 4200);
 
