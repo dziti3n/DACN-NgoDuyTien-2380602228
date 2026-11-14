@@ -102,13 +102,18 @@ echo "[*] 2/3. Đang kiểm tra cấu hình <integration> trong ${OSSEC_CONF}...
 #   - 5404: sudo: 3 failed attempts to run sudo (Level 10)
 #   - 5405: sudo: user NOT in sudoers executed command (Level 5/7)
 #   - 550:  ossec: Integrity checksum changed / FIM (Level 7)
-# Lưu ý: Rule 5715 (Accepted publickey) không đưa vào live filter để tránh đẩy mọi phiên SSH hợp lệ vào hàng đợi SOAR.
-RULE_FILTER="5710,5711,5712,5760,5763,5401,5402,5404,5405,550"
+#   - 5715: sshd: authentication success (Level 3 - Theo dõi tương quan đa bước, không gọi LLM khi bình thường)
+#   - 5902: useradd/usermod: new user / group modification (Level 7/8)
+RULE_FILTER="5710,5711,5712,5715,5760,5763,5401,5402,5404,5405,550,5902"
 
 if grep -q "custom-ai-soc" "$OSSEC_CONF"; then
     echo "[!] Cấu hình custom-ai-soc đã tồn tại trong ${OSSEC_CONF}."
     echo "[*] Đang cập nhật hook_url, api_key và rule_id..."
     sed -i "s|<hook_url>.*</hook_url>|<hook_url>${HOOK_URL}</hook_url>|g" "$OSSEC_CONF"
+    sed -i "s|<rule_id>.*</rule_id>|<rule_id>${RULE_FILTER}</rule_id>|g" "$OSSEC_CONF"
+    if [[ "$AUTH_TOKEN" != "<WEBHOOK_AUTH_TOKEN>" ]]; then
+        sed -i "s|<api_key>.*</api_key>|<api_key>${AUTH_TOKEN}</api_key>|g" "$OSSEC_CONF"
+    fi
 else
     echo "[*] Đang chèn khối <integration> bảo mật vào trước </ossec_config>..."
     INTEGRATION_BLOCK="  <integration>\n    <name>custom-ai-soc</name>\n    <hook_url>${HOOK_URL}</hook_url>\n    <api_key>${AUTH_TOKEN}</api_key>\n    <rule_id>${RULE_FILTER}</rule_id>\n    <alert_format>json</alert_format>\n  </integration>\n</ossec_config>"

@@ -26,7 +26,8 @@ load_dotenv()
 
 try:
     from core.agent import investigate
-    from telemetry.tools import block_ip, unblock_ip, verify_response
+    from telemetry.tools import block_ip, unblock_ip, verify_response, terminate_user_sessions
+    from core.correlator import KillChainCorrelator, CorrelationDecision, load_baseline_config
     from core.policy_engine import (
         evaluate_action,
         record_audit_log,
@@ -39,7 +40,8 @@ try:
     from integrations.notifier import build_alert_html, send_alert_email
 except ImportError:
     from agent import investigate
-    from tools import block_ip, unblock_ip, verify_response
+    from tools import block_ip, unblock_ip, verify_response, terminate_user_sessions
+    from correlator import KillChainCorrelator, CorrelationDecision, load_baseline_config
     from policy_engine import (
         evaluate_action,
         record_audit_log,
@@ -51,6 +53,7 @@ except ImportError:
     )
     from notifier import build_alert_html, send_alert_email
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 RUNS_DIR = Path("runs")
 WAZUH_ALERTS_FILE = RUNS_DIR / "wazuh_alerts.jsonl"
 STATE_FILE = RUNS_DIR / "monitor_state.json"
@@ -253,27 +256,11 @@ ALLOWED_SUDO_EXACT_COMMANDS = {
 
 
 def get_baseline_allowed_sudoers() -> set:
-    try:
-        baseline_path = BASE_DIR / "baseline.json"
-        if baseline_path.exists():
-            with open(baseline_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return set(data.get("allowed_sudo_members", []))
-    except Exception:
-        pass
-    return {"admin_duytien", "agent_soc", "admin"}
+    return set(load_baseline_config().get("allowed_sudo_members", ["admin_duytien", "agent_soc", "admin"]))
 
 
 def get_baseline_allowed_users() -> set:
-    try:
-        baseline_path = BASE_DIR / "baseline.json"
-        if baseline_path.exists():
-            with open(baseline_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return set(data.get("allowed_users", []))
-    except Exception:
-        pass
-    return {"admin_duytien", "agent_soc", "admin"}
+    return set(load_baseline_config().get("allowed_users", ["admin_duytien", "agent_soc", "admin"]))
 
 
 def fast_path_triage(alert: dict) -> Optional[dict]:
@@ -446,57 +433,81 @@ def fast_path_triage(alert: dict) -> Optional[dict]:
 
 
 class WazuhWebhookManager:
-    """Quản lý tiếp nhận alert từ Wazuh qua hàng đợi tuần tự (FIFO Queue)."""
+    """
+    Quản lý tiếp nhận & điều phối Hybrid 2 tầng từ Wazuh SIEM:
+    - Tầng 1 (Real-Time <0.5s): Tương quan chuỗi nhiều bước + Policy Guardrails + Chặn nhanh UFW (KHÔNG chờ LLM).
+    - Tầng 2 (Non-Real-Time Background): Local LLM điều tra chuyên sâu, xử lý ca nhập nhằng & gửi báo cáo Email.
+    """
 
-    def __init__(self, auto_block: bool = True, test_mode: bool = False, cooldown_minutes: int = 15):
+    def __init__(self, auto_block: bool = True, test_mode: bool = False, cooldown_minutes: int = 15, async_ai: bool = True):
         self.auto_block = auto_block
         self.test_mode = test_mode
         self.cooldown_minutes = cooldown_minutes
+        self.async_ai = async_ai
         self.ip_cooldown: Dict[str, float] = {}
         self.total_alerts_received = 0
         self.total_blocks_executed = 0
         self.total_emails_sent = 0
+        self.total_false_positives_prevented = 0
+        self.total_multistep_detected = 0
         self.start_time = datetime.now()
         self.running = False
         self._lock = threading.Lock()
 
-        # Hàng đợi tuần tự FIFO
+        # Động cơ tương quan trạng thái chuỗi tấn công & chống chặn nhầm
+        self.correlator = KillChainCorrelator(window_sec=300.0)
+
+        # Hàng đợi Tầng 1 (Real-Time) & Hàng đợi Tầng 2 (Non-Real-Time AI Analytics)
         self.alert_queue: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.ai_queue: queue.Queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
         self._worker_thread: Optional[threading.Thread] = None
+        self._ai_worker_thread: Optional[threading.Thread] = None
 
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
         self._load_state()
 
+    def _runs_dir(self) -> Path:
+        return Path(os.getenv("SOC_RUNS_DIR", str(RUNS_DIR)))
+
     def _load_state(self):
-        if STATE_FILE.exists():
+        state_file = self._runs_dir() / "monitor_state.json"
+        if state_file.exists():
             try:
-                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                with open(state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.total_alerts_received = data.get("total_alerts_handled", 0)
                     self.total_blocks_executed = data.get("total_blocks_executed", 0)
                     self.total_emails_sent = data.get("total_emails_sent", 0)
+                    self.total_false_positives_prevented = data.get("total_false_positives_prevented", 0)
+                    self.total_multistep_detected = data.get("total_multistep_detected", 0)
             except Exception:
                 pass
 
     def _save_state(self):
         with self._lock:
+            runs_dir = self._runs_dir()
+            runs_dir.mkdir(parents=True, exist_ok=True)
+            state_file = runs_dir / "monitor_state.json"
             state = {
                 "is_running": self.running,
-                "mode": "event-driven (Authenticated Wazuh SIEM Webhook)",
+                "mode": "hybrid-event-driven (Real-Time Correlator + Non-Real-Time LLM)",
                 "pid": os.getpid(),
                 "started_at": self.start_time.isoformat(),
                 "last_active_at": datetime.now().isoformat(),
                 "auto_block_enabled": self.auto_block,
                 "queue_size": self.alert_queue.qsize(),
+                "ai_queue_size": self.ai_queue.qsize(),
                 "total_alerts_handled": self.total_alerts_received,
                 "total_blocks_executed": self.total_blocks_executed,
                 "total_emails_sent": self.total_emails_sent,
+                "total_false_positives_prevented": self.total_false_positives_prevented,
+                "total_multistep_detected": self.total_multistep_detected,
                 "active_cooldowns": {
                     ip: round(time.time() - ts, 1) for ip, ts in self.ip_cooldown.items()
                 }
             }
             try:
-                with open(STATE_FILE, "w", encoding="utf-8") as f:
+                with open(state_file, "w", encoding="utf-8") as f:
                     json.dump(state, f, ensure_ascii=False, indent=2)
             except Exception:
                 pass
@@ -549,7 +560,9 @@ class WazuhWebhookManager:
             "raw_wazuh": raw_payload
         }
         try:
-            with open(WAZUH_ALERTS_FILE, "a", encoding="utf-8") as f:
+            runs_dir = self._runs_dir()
+            runs_dir.mkdir(parents=True, exist_ok=True)
+            with open(runs_dir / "wazuh_alerts.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as ex:
             print(f"[!] Lỗi ghi wazuh_alerts.jsonl: {ex}")
@@ -564,13 +577,16 @@ class WazuhWebhookManager:
             return False, "Queue is full (Overload Protection)", self.alert_queue.qsize()
 
     def start_worker(self):
-        """Khởi động luồng worker xử lý tuần tự hàng đợi alert."""
+        """Khởi động cả luồng Real-Time (Tầng 1) và luồng AI Non-Real-Time (Tầng 2)."""
         if self._worker_thread is None or not self._worker_thread.is_alive():
             self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker_thread.start()
+        if self.async_ai and (self._ai_worker_thread is None or not self._ai_worker_thread.is_alive()):
+            self._ai_worker_thread = threading.Thread(target=self._ai_worker_loop, daemon=True)
+            self._ai_worker_thread.start()
 
     def _worker_loop(self):
-        """Vòng lặp lấy alert từ hàng đợi và tiến hành điều tra phản ứng."""
+        """Vòng lặp Tầng 1: xử lý cảnh báo thời gian thực không đợi LLM."""
         while self.running:
             try:
                 raw_payload = self.alert_queue.get(timeout=1.0)
@@ -584,45 +600,226 @@ class WazuhWebhookManager:
             finally:
                 self.alert_queue.task_done()
 
+    def _ai_worker_loop(self):
+        """Vòng lặp Tầng 2 (Non-Real-Time): chạy Local LLM ở hậu cảnh cho điều tra sâu & báo cáo."""
+        while self.running or not self.ai_queue.empty():
+            try:
+                job = self.ai_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                self._execute_ai_job(job)
+            except Exception as ex:
+                print(f"[!] Lỗi trong AI background worker: {ex}")
+            finally:
+                self.ai_queue.task_done()
+
+    def _execute_containment(
+        self,
+        target_ip: Optional[str],
+        alert: dict,
+        corr: CorrelationDecision,
+        source_label: str = "Real-Time Correlator (Tầng 1)"
+    ) -> dict:
+        """Thực thi cô lập đa tầng (Block IP UFW + Ngắt phiên bị xâm nhập nếu Kill-Chain Stage >= 2)."""
+        response_info: Dict[str, Any] = {"action": "none", "status": "none", "multistep_actions": []}
+        evidence_list = corr.timeline_summary or [alert.get("summary", "Wazuh Security Event")]
+
+        if target_ip:
+            print(f"\n🛡️ [POLICY ENGINE] Thẩm định an toàn cho cách ly IP '{target_ip}'...")
+            decision = evaluate_action(
+                action="block_ip",
+                target=target_ip,
+                context={
+                    "alert": alert,
+                    "evidence": evidence_list,
+                    "verdict": corr.verdict_hint,
+                    "confidence": corr.confidence,
+                    "severity": corr.severity,
+                    "correlation_route": corr.route,
+                    "is_false_positive_protected": corr.is_false_positive_protected,
+                }
+            )
+
+            if decision.allowed:
+                print(f"✅ [CHẤP THUẬN] {decision.reason}")
+                if self.auto_block:
+                    print(f"⚡ [AUTO-BLOCK <0.5s] Chặn IP {target_ip} qua UFW Wrapper (KHÔNG chờ LLM)...")
+                    if not self.test_mode:
+                        exec_res = block_ip(target_ip)
+                        verify_res = verify_response(target_ip, expected_state="blocked")
+                    else:
+                        exec_res = {"status": "success", "note": "Test/Mock mode"}
+                        verify_res = {"state": "blocked", "active": True}
+
+                    save_active_block(target_ip, ttl_minutes=DEFAULT_BLOCK_TTL_MINUTES, reason=corr.reason)
+                    record_audit_log(
+                        action="block_ip",
+                        target=target_ip,
+                        operator=source_label,
+                        policy_decision=decision,
+                        execution_result=exec_res,
+                        verification_result=verify_res
+                    )
+                    self.total_blocks_executed += 1
+                    response_info.update({
+                        "action": "block_ip",
+                        "status": "blocked",
+                        "target_ip": target_ip,
+                        "ttl_minutes": DEFAULT_BLOCK_TTL_MINUTES,
+                        "reason": decision.reason,
+                    })
+                    print(f"🛡️ [HOÀN TẤT CÁCH LY] IP {target_ip} đã bị chặn trên UFW trong {DEFAULT_BLOCK_TTL_MINUTES} phút.")
+                else:
+                    response_info.update({
+                        "action": "block_ip",
+                        "status": "pending_approval",
+                        "target_ip": target_ip,
+                        "reason": "Chế độ Auto-Block đang tắt. Chờ chuyên viên duyệt trên Dashboard."
+                    })
+            else:
+                record_audit_log(
+                    action="block_ip",
+                    target=target_ip,
+                    operator=source_label,
+                    policy_decision=decision,
+                    execution_result={"status": "rejected"},
+                    verification_result=None
+                )
+                response_info.update({
+                    "action": "block_ip",
+                    "status": "rejected",
+                    "target_ip": target_ip,
+                    "reason": decision.reason,
+                })
+                print(f"🛑 [TỪ CHỐI CHẶN] {target_ip}: {decision.reason}")
+
+        # Phản ứng đa bước cho Kill-Chain Stage >= 2 (ngắt phiên tài khoản bị xâm nhập ngoài việc chặn IP)
+        if corr.route == "MULTISTEP_CONTAINMENT" and corr.compromised_user:
+            sess_dec = evaluate_action(
+                action="terminate_session",
+                target=corr.compromised_user,
+                context={"kill_chain_stage": corr.kill_chain_stage}
+            )
+            if sess_dec.allowed:
+                if not self.test_mode:
+                    sess_res = terminate_user_sessions(corr.compromised_user)
+                else:
+                    sess_res = {"tool": "terminate_user_sessions", "status": "ok", "data": {"terminated_user": corr.compromised_user, "mock": True}}
+                record_audit_log(
+                    action="terminate_session",
+                    target=corr.compromised_user,
+                    operator=source_label,
+                    policy_decision=sess_dec,
+                    execution_result=sess_res,
+                    verification_result={"kill_chain_stage": corr.kill_chain_stage}
+                )
+                response_info["multistep_actions"].append({
+                    "action": "terminate_session",
+                    "target": corr.compromised_user,
+                    "status": sess_res.get("status", "ok"),
+                })
+                print(f"🔒 [MULTI-STEP CONTAINMENT] Đã kích hoạt ngắt phiên xâm nhập của user '{corr.compromised_user}' (Stage {corr.kill_chain_stage}).")
+
+        return response_info
+
+    def _dispatch_email(self, alert: dict, run: dict, response_info: dict):
+        """Gửi bản tin cảnh báo HTML chi tiết tới SOC Analyst."""
+        rule_desc = alert.get("wazuh", {}).get("description", alert.get("summary"))
+        rule_level = alert.get("wazuh", {}).get("level", 7)
+        src_ip = alert.get("src_ip")
+        verdict = run.get("conclusion", {}).get("verdict", "")
+
+        print(f"\n📧 [THÔNG BÁO] Đang xử lý email báo cáo sự cố (Non-Real-Time AI Report)...")
+        subject = f"🚨 [WAZUH SOC ALERT] {rule_desc} từ {src_ip or 'Hệ thống'} (Cấp độ: {rule_level})"
+        html_body = build_alert_html(alert, run, response_info)
+        plain_text = f"Cảnh báo Wazuh {rule_desc} từ IP {src_ip}. Verdict: {verdict}. Xem file HTML đính kèm để biết chi tiết."
+
+        email_res = send_alert_email(subject, html_body, plain_text)
+        if email_res.get("status") == "sent":
+            self.total_emails_sent += 1
+            print(f"✅ [EMAIL SENT] Đã gửi thư cảnh báo thành công tới: {email_res.get('recipient')}")
+        elif email_res.get("status") == "skipped":
+            print(f"ℹ️ [EMAIL SKIPPED] {email_res.get('reason')}")
+            print(f"   Bản tin HTML đã được lưu tại: {email_res.get('preview_path')}")
+        else:
+            print(f"⚠️ [EMAIL ERROR] {email_res.get('error')}")
+
+    def _execute_ai_job(self, job: dict):
+        """Tầng 2 (Non-Real-Time): Chạy Local LLM phân tích chuyên sâu / xử lý ca nhập nhằng & gửi báo cáo."""
+        alert = job["alert"]
+        corr_dict = job["correlation"]
+        response_info = job["response_info"]
+        mode = job["mode"]  # "post_containment" | "gray_zone_review"
+        rule_level = int(alert.get("wazuh", {}).get("level", 7))
+        rule_id = str(alert.get("wazuh", {}).get("rule_id", ""))
+        rule_desc = alert.get("wazuh", {}).get("description", alert.get("summary"))
+        src_ip = corr_dict.get("correlated_ip") or alert.get("src_ip")
+
+        print(f"\n🧠 [NON-REAL-TIME AI TẦNG 2] Bắt đầu phân tích Local LLM ({mode}) cho Rule {rule_id} / IP {src_ip or 'N/A'}...")
+        try:
+            run = investigate(alert, verbose=False)
+        except Exception as ex:
+            print(f"[-] Lỗi trong quá trình AI ReAct điều tra ngoại tuyến: {ex}")
+            run = {
+                "model": "qwen3:4b (Fallback)",
+                "conclusion": {
+                    "verdict": corr_dict.get("verdict_hint", "malicious_activity_likely"),
+                    "severity": corr_dict.get("severity", "high"),
+                    "confidence": corr_dict.get("confidence", "high"),
+                    "summary": corr_dict.get("reason") or f"Wazuh SIEM phát hiện sự cố: {rule_desc}",
+                    "evidence": corr_dict.get("timeline_summary") or [f"Wazuh Rule {rule_id}: {rule_desc}"],
+                    "recommended_actions": corr_dict.get("recommended_actions") or ([f"Chặn IP {src_ip}"] if src_ip else [])
+                }
+            }
+
+        conclusion = run.get("conclusion", {})
+        verdict = conclusion.get("verdict", "")
+        print(f"[+] [TẦNG 2 HOÀN TẤT] Verdict={verdict} | Severity={conclusion.get('severity')} | Confidence={conclusion.get('confidence')}")
+        print(f"    Tóm tắt: {conclusion.get('summary')}")
+
+        # Nếu là ca nhập nhằng chưa chặn ở Tầng 1 và KHÔNG nằm trong danh sách bảo vệ chống khóa nhầm Admin
+        if mode == "gray_zone_review" and src_ip and response_info.get("action") == "none":
+            is_fp_guard = bool(corr_dict.get("is_false_positive_protected"))
+            if verdict == "malicious_activity_likely" and conclusion.get("confidence") == "high" and not is_fp_guard:
+                corr_obj = CorrelationDecision(**corr_dict)
+                corr_obj.verdict_hint = verdict
+                response_info = self._execute_containment(
+                    src_ip, alert, corr_obj, source_label="Non-Real-Time AI Escalation (Tầng 2)"
+                )
+            elif is_fp_guard:
+                print(f"🛡️ [ANTI-LOCKOUT XÁC NHẬN] Giữ nguyên trạng thái không chặn cho IP quản trị {src_ip} (Chống khóa nhầm Admin).")
+
+        should_send_email = (
+            verdict in ("malicious_activity_likely", "suspicious_needs_more_data")
+            or response_info.get("action") == "block_ip"
+            or rule_level >= 7
+        ) and not conclusion.get("fast_path")
+
+        if should_send_email:
+            self._dispatch_email(alert, run, response_info)
+        self._save_state()
+
     def process_wazuh_alert(self, raw_payload: dict) -> dict:
-        """Xử lý toàn diện một cảnh báo sau khi rút ra từ hàng đợi."""
+        """Xử lý Tầng 1 thời gian thực (<0.5s) và đẩy phân tích LLM về Tầng 2 bất đồng bộ."""
         alert = normalize_wazuh_alert(raw_payload)
         self.append_alert_to_history(alert, raw_payload)
 
         src_ip = alert.get("src_ip")
         rule_desc = alert.get("wazuh", {}).get("description", alert.get("summary"))
-        rule_id = alert.get("wazuh", {}).get("rule_id", "N/A")
-        rule_level = alert.get("wazuh", {}).get("level", 7)
+        rule_id = str(alert.get("wazuh", {}).get("rule_id", "N/A"))
+        rule_level = int(alert.get("wazuh", {}).get("level", 7))
         sev = alert.get("severity_hint", "medium").upper()
 
         print("\n" + "=" * 75)
-        print(f"📥 [WAZUH ALERT TỪ HÀNG ĐỢI] Rule: {rule_id} | Cấp độ: {rule_level} ({sev})")
+        print(f"📥 [WAZUH ALERT TẦNG 1] Rule: {rule_id} | Cấp độ: {rule_level} ({sev})")
         print(f"   Mô tả: {rule_desc}")
         print(f"   IP Nguồn: {src_ip or 'N/A'} | Target User: {alert.get('user')}")
         print(f"   Thời gian: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 75)
 
-        # Kiểm tra IP Cooldown chống bão alert & phát hiện leo thang tấn công
-        active_blocks = load_active_blocks()
-        is_already_blocked = src_ip in active_blocks
-        is_escalation = str(rule_id) in ("5712", "5763", "5404") or int(rule_level) >= 10
-
-        if is_already_blocked:
-            print(f"  [ALREADY BLOCKED] IP {src_ip} hiện đang bị cách ly trên UFW. Bỏ qua điều tra lặp lại.")
-            return {"status": "skipped", "reason": f"IP {src_ip} already blocked"}
-
-        if src_ip and self.is_in_cooldown(src_ip) and not is_escalation:
-            print(f"  [COOLDOWN] Bỏ qua điều tra IP {src_ip} (đang trong thời gian làm nguội).")
-            return {"status": "skipped", "reason": f"IP {src_ip} in cooldown"}
-
-        if src_ip and not is_escalation:
-            self.ip_cooldown[src_ip] = time.time()
-
-        self.total_alerts_received += 1
-
-        # 0. Chống vòng lặp tự kích hoạt (SOAR Self-Triggering Loop Prevention):
-        # Khi Agent (agent_soc) chạy lệnh kiểm tra UFW hoặc các script wrapper phản ứng,
-        # Wazuh sẽ ghi nhận Rule 5401/5402/5404. Cần bỏ qua tất cả hành động nội bộ của chính SOAR.
+        # 0. Chống vòng lặp nội bộ của chính agent_soc khi chạy wrapper kiểm tra sudo/UFW
         acting_user = (
             alert.get("src_user")
             or alert.get("user")
@@ -630,167 +827,119 @@ class WazuhWebhookManager:
             or alert.get("details", {}).get("srcuser")
             or ""
         )
-        if acting_user == "agent_soc":
+        full_log_text = alert.get("wazuh", {}).get("full_log", "")
+        if acting_user == "agent_soc" and (rule_id in ("5401", "5402", "5404", "5405", "550") or "soc-block-ip" in full_log_text or "/usr/sbin/ufw" in full_log_text):
             print(f"🔄 [SOAR INTERNAL TELEMETRY] Bỏ qua sự kiện nội bộ từ 'agent_soc' (Rule {rule_id}) để chống vòng lặp.")
             return {"status": "skipped", "reason": "agent_soc internal telemetry loop prevention"}
 
-        # 0.1. Tier 1 Telemetry Filter (Chống nghẽn hàng đợi LLM - Queue Starvation):
-        # Các sự kiện thử sai đơn lẻ (Rule 5710, 5711, 5716, 5760 với Level < 7) đã được lưu vào
-        # wazuh_alerts.jsonl để Agent truy vấn lịch sử. Tuyệt đối không gọi Local LLM cho từng lần gõ sai đơn lẻ
-        # (tránh việc Hydra bắn 262 lần làm hàng đợi LLM bị kẹt hàng tiếng đồng hồ).
-        # Khi đạt ngưỡng 8+ lần trong 120s, Wazuh SIEM sẽ kích hoạt Rule 5712 (Level 10 - Brute Force).
-        if str(rule_id) in ("5710", "5711", "5716", "5760") and int(rule_level) < 7:
-            print(f"📊 [TELEMETRY BUFFERED] Lưu vết xác thực thất bại từ {src_ip} (Rule {rule_id}). Đang chờ ngưỡng Brute Force (Rule 5712)...")
-            return {"status": "telemetry_logged", "reason": f"Single auth failure recorded for Rule {rule_id}"}
-
-        # 1. Thử nghiệm Fast-Path Triage xác định (Tier 1.5 - <1ms)
+        # 1. Thử Fast-Path Triage xác định (<1ms) cho lệnh bảo trì / publickey chuẩn
         fast_conclusion = fast_path_triage(alert)
-        if fast_conclusion:
-            print(f"⚡ [FAST-PATH TRIAGE] Nhận diện hành vi bảo trì hợp lệ trong <1ms (Bỏ qua LLM queue):")
+        if fast_conclusion and rule_id != "5715":
+            print(f"⚡ [FAST-PATH TRIAGE] Nhận diện hành vi bảo trì hợp lệ trong <1ms (Bỏ qua LLM):")
             print(f"   Verdict: {fast_conclusion['verdict']} | Tóm tắt: {fast_conclusion['summary']}")
+            self.total_alerts_received += 1
             run = {
                 "model": "Fast-Path Deterministic Filter (Tier 1.5)",
                 "elapsed_sec": 0.001,
                 "tool_calls": 0,
                 "conclusion": fast_conclusion
             }
-            # Ghi nhận kiểm toán cho fast-path bypass để chuyên viên SOC có audit trail hoàn chỉnh
             record_audit_log(
                 action="fast_path_triage",
-                target=alert.get("src_ip") or alert.get("user") or "system",
+                target=src_ip or alert.get("user") or "system",
                 operator="Fast-Path Deterministic Filter (Tier 1.5)",
-                policy_decision=PolicyDecision(True, "Fast-path: Hành vi bảo trì/quản trị hợp lệ khớp chữ ký an toàn"),
+                policy_decision=PolicyDecision(True, "fast_path", src_ip or "system", "Fast-path: Hành vi bảo trì/quản trị hợp lệ khớp chữ ký an toàn"),
                 execution_result={"status": "bypassed_llm", "verdict": fast_conclusion["verdict"], "rule_id": rule_id},
                 verification_result={"fast_path": True}
             )
-        else:
-            # Kích hoạt AI ReAct Agent điều tra thông minh qua Local Ollama
-            print(f"[*] Đang kích hoạt Local AI SOC Agent (Ollama) để phân tích bằng chứng...")
-            try:
-                run = investigate(alert, verbose=False)
-            except Exception as ex:
-                print(f"[-] Lỗi trong quá trình AI ReAct điều tra: {ex}")
-                run = {
-                    "model": "qwen3:4b (Fallback)",
-                    "conclusion": {
-                        "verdict": "malicious_activity_likely",
-                        "severity": sev.lower(),
-                        "confidence": "high",
-                        "summary": f"Wazuh SIEM phát hiện sự cố: {rule_desc}",
-                        "evidence": [f"Wazuh Rule {rule_id}: {rule_desc}"],
-                        "recommended_actions": [f"Chặn IP {src_ip}"] if src_ip else []
-                    }
-                }
+            self._save_state()
+            return {"status": "success", "alert": alert, "investigation": run, "response": {"action": "none", "status": "fast_path_benign"}}
 
-        conclusion = run.get("conclusion", {})
-        verdict = conclusion.get("verdict", "")
-        recs = conclusion.get("recommended_actions", [])
-        evidence = conclusion.get("evidence", [])
+        # 2. Đưa qua Bộ Tương Quan Chuỗi Tấn Công & Bảo Vệ Chống Chặn Nhầm (<1ms)
+        corr = self.correlator.evaluate_event(alert, raw_payload)
+        corr_ip = corr.correlated_ip or src_ip
+        if corr_ip and not alert.get("src_ip"):
+            alert["src_ip"] = corr_ip
 
-        print(f"[+] Kết luận điều tra: Verdict={verdict} | Severity={conclusion.get('severity')} | Confidence={conclusion.get('confidence')}")
-        print(f"    Tóm tắt: {conclusion.get('summary')}")
+        # Đính kèm bằng chứng tương quan để Tầng 2 (LLM) nắm toàn bộ kill-chain
+        alert["correlation"] = corr.to_dict()
 
-        # 2. Thẩm định qua Policy Engine & Quyết định phản ứng
+        # Kiểm tra đã bị chặn trước đó: chỉ bỏ qua Brute Force đơn thuần lặp lại, KHÔNG bỏ qua leo thang đa bước!
+        active_blocks = load_active_blocks()
+        is_already_blocked = bool(corr_ip and corr_ip in active_blocks)
+        if is_already_blocked and corr.route != "MULTISTEP_CONTAINMENT":
+            print(f"  [ALREADY BLOCKED] IP {corr_ip} hiện đang bị cách ly trên UFW. Bỏ qua điều tra lặp lại.")
+            return {"status": "skipped", "reason": f"IP {corr_ip} already blocked"}
+
+        is_escalation = corr.route in ("FAST_BLOCK", "MULTISTEP_CONTAINMENT") or rule_level >= 10
+        if corr_ip and self.is_in_cooldown(corr_ip) and not is_escalation:
+            if corr.route in ("TELEMETRY_ONLY", "FAST_BENIGN"):
+                pass
+            else:
+                print(f"  [COOLDOWN] Bỏ qua điều tra IP {corr_ip} (đang trong thời gian làm nguội).")
+                return {"status": "skipped", "reason": f"IP {corr_ip} in cooldown"}
+
+        self.total_alerts_received += 1
+
+        # 3. Xử lý các nhánh định tuyến của Tầng 1
+        if corr.route in ("TELEMETRY_ONLY", "FAST_BENIGN"):
+            if corr.is_false_positive_protected:
+                self.total_false_positives_prevented += 1
+            print(f"📊 [{corr.route}] {corr.reason}")
+            self._save_state()
+            return {
+                "status": "telemetry_logged" if corr.route == "TELEMETRY_ONLY" else "benign_fast",
+                "reason": corr.reason,
+                "correlation": corr.to_dict(),
+                "response": {"action": "none", "status": "none"},
+            }
+
+        if corr_ip and corr.route == "DEFER_TO_LLM":
+            self.ip_cooldown[corr_ip] = time.time()
+
         response_info = {"action": "none", "status": "none"}
-        should_block = (
-            any("chặn" in r.lower() or "block" in r.lower() for r in recs)
-            or (verdict == "malicious_activity_likely" and src_ip)
-            or (str(rule_id) in ("5712", "5763") and src_ip)
-        )
+        if corr.route in ("FAST_BLOCK", "MULTISTEP_CONTAINMENT"):
+            if corr.route == "MULTISTEP_CONTAINMENT":
+                self.total_multistep_detected += 1
+                print(f"🚨 [KILL-CHAIN STAGE {corr.kill_chain_stage}] {corr.reason}")
+            if not is_already_blocked or corr.route == "MULTISTEP_CONTAINMENT":
+                response_info = self._execute_containment(corr_ip, alert, corr)
+        elif corr.route == "DEFER_TO_LLM":
+            if corr.is_false_positive_protected:
+                self.total_false_positives_prevented += 1
+            print(f"🛡️ [{corr.route}] {corr.reason}")
 
-        if should_block and src_ip:
-            print(f"\n🛡️ [POLICY ENGINE] Thẩm định an toàn cho đề xuất cách ly IP '{src_ip}'...")
-            decision = evaluate_action(
-                action="block_ip",
-                target=src_ip,
-                context={
-                    "alert": alert,
-                    "evidence": evidence,
-                    "verdict": verdict,
-                    "confidence": conclusion.get("confidence"),
-                    "severity": conclusion.get("severity"),
-                }
-            )
+        # 4. Đẩy việc suy luận Local LLM chậm (15-20s) sang Tầng 2 Bất Đồng Bộ (Non-Real-Time)!
+        ai_mode = "post_containment" if corr.route in ("FAST_BLOCK", "MULTISTEP_CONTAINMENT") else "gray_zone_review"
+        fast_summary_run = {
+            "model": "Deterministic Correlator Tầng 1 (LLM đang phân tích nền Tầng 2)",
+            "elapsed_sec": 0.005,
+            "conclusion": {
+                "verdict": corr.verdict_hint,
+                "severity": corr.severity,
+                "confidence": corr.confidence,
+                "summary": corr.reason,
+                "evidence": corr.timeline_summary,
+                "recommended_actions": corr.recommended_actions,
+            }
+        }
 
-            if decision.allowed:
-                print(f"✅ [CHẤP THUẬN] {decision.reason}")
-                if self.auto_block:
-                    print(f"⚡ [AUTO-BLOCK] Chế độ Tự hành kích hoạt! Đang chặn IP {src_ip} qua UFW Wrapper...")
-                    if not self.test_mode:
-                        exec_res = block_ip(src_ip)
-                        verify_res = verify_response(src_ip, expected_state="blocked")
-                    else:
-                        exec_res = {"status": "success", "note": "Test/Mock mode"}
-                        verify_res = {"state": "blocked", "active": True}
+        ai_job = {
+            "mode": ai_mode,
+            "alert": alert,
+            "correlation": corr.to_dict(),
+            "response_info": response_info,
+        }
 
-                    save_active_block(src_ip, ttl_minutes=DEFAULT_BLOCK_TTL_MINUTES)
-                    record_audit_log(
-                        action="block_ip",
-                        target=src_ip,
-                        operator="Wazuh SIEM Autonomous Webhook",
-                        policy_decision=decision,
-                        execution_result=exec_res,
-                        verification_result=verify_res
-                    )
-                    self.total_blocks_executed += 1
-                    response_info = {
-                        "action": "block_ip",
-                        "status": "blocked",
-                        "target_ip": src_ip,
-                        "ttl_minutes": DEFAULT_BLOCK_TTL_MINUTES,
-                        "reason": decision.reason,
-                    }
-                    print(f"🛡️ [HOÀN TẤT CÁCH LY] IP {src_ip} đã bị chặn trên UFW trong {DEFAULT_BLOCK_TTL_MINUTES} phút.")
-                else:
-                    response_info = {
-                        "action": "block_ip",
-                        "status": "pending_approval",
-                        "target_ip": src_ip,
-                        "reason": "Chế độ Auto-Block đang tắt. Chờ chuyên viên bấm duyệt trên Dashboard."
-                    }
-                    print(f"⏳ [PENDING APPROVAL] Đề xuất chặn IP {src_ip} đang chờ chuyên viên duyệt thủ công.")
-            else:
-                record_audit_log(
-                    action="block_ip",
-                    target=src_ip,
-                    operator="Wazuh SIEM Autonomous Webhook",
-                    policy_decision=decision,
-                    execution_result={"status": "rejected"},
-                    verification_result=None
-                )
-                response_info = {
-                    "action": "block_ip",
-                    "status": "rejected",
-                    "target_ip": src_ip,
-                    "reason": decision.reason,
-                }
-                print(f"🛑 [BỊ TỪ CHỐI BẢO MẬT] Không thể chặn IP {src_ip}: {decision.reason}")
-
-        # 3. Soạn và Gửi Email Báo động Cảnh báo
-        # CHỈ gửi email khi có mối đe dọa thực sự (malicious / suspicious) hoặc khi có hành động chặn IP
-        should_send_email = (
-            verdict in ("malicious_activity_likely", "suspicious_needs_more_data")
-            or response_info.get("action") == "block_ip"
-            or rule_level >= 7
-        ) and not run.get("conclusion", {}).get("fast_path")
-
-        if should_send_email:
-            print(f"\n📧 [THÔNG BÁO] Đang xử lý email báo cáo sự cố...")
-            subject = f"🚨 [WAZUH SOC ALERT] {rule_desc} từ {src_ip or 'Hệ thống'} (Cấp độ: {rule_level})"
-            html_body = build_alert_html(alert, run, response_info)
-            plain_text = f"Cảnh báo Wazuh {rule_desc} từ IP {src_ip}. Verdict: {verdict}. Xem file HTML đính kèm để biết chi tiết."
-
-            email_res = send_alert_email(subject, html_body, plain_text)
-            if email_res.get("status") == "sent":
-                self.total_emails_sent += 1
-                print(f"✅ [EMAIL SENT] Đã gửi thư cảnh báo thành công tới: {email_res.get('recipient')}")
-            elif email_res.get("status") == "skipped":
-                print(f"ℹ️ [EMAIL SKIPPED] {email_res.get('reason')}")
-                print(f"   Bản tin HTML đã được lưu tại: {email_res.get('preview_path')}")
-            else:
-                print(f"⚠️ [EMAIL ERROR] {email_res.get('error')}")
+        if self.async_ai and self.running:
+            try:
+                self.ai_queue.put_nowait(ai_job)
+                print(f"📤 [ĐẨY SANG TẦNG 2 (NON-REAL-TIME)] Tác vụ LLM ({ai_mode}) đã xếp hàng nền — Tầng 1 hoàn tất tức thì!")
+            except queue.Full:
+                print("⚠️ [AI QUEUE FULL] Hàng đợi AI Tầng 2 đầy, bỏ qua báo cáo LLM cho sự kiện này.")
         else:
-            print(f"\nℹ️ [EMAIL SKIPPED] Bỏ qua gửi email cho sự kiện bình thường / cấp độ thấp (Verdict: {verdict}, Rule Level: {rule_level}).")
+            # Chế độ đồng bộ khi chạy script test đơn lẻ không khởi động background thread
+            self._execute_ai_job(ai_job)
 
         print("-" * 75 + "\n")
         self._save_state()
@@ -798,8 +947,9 @@ class WazuhWebhookManager:
         return {
             "status": "success",
             "alert": alert,
-            "investigation": run,
-            "response": response_info
+            "correlation": corr.to_dict(),
+            "investigation": fast_summary_run,
+            "response": response_info,
         }
 
 
@@ -869,11 +1019,14 @@ class WazuhWebhookHandler(BaseHTTPRequestHandler):
             manager = get_wazuh_manager()
             self._send_json_response(200, {
                 "status": "healthy",
-                "mode": "event-driven (Authenticated Wazuh SIEM Webhook)",
+                "mode": "hybrid-event-driven (Real-Time Correlator + Non-Real-Time LLM)",
                 "uptime_sec": round((datetime.now() - manager.start_time).total_seconds(), 1),
                 "queue_size": manager.alert_queue.qsize(),
+                "ai_queue_size": manager.ai_queue.qsize(),
                 "total_alerts_handled": manager.total_alerts_received,
                 "total_blocks_executed": manager.total_blocks_executed,
+                "total_false_positives_prevented": manager.total_false_positives_prevented,
+                "total_multistep_detected": manager.total_multistep_detected,
                 "auto_block_enabled": manager.auto_block
             })
         elif parsed_path == "/api/v1/alerts":
@@ -1007,6 +1160,10 @@ class WazuhWebhookServer:
         print("\n[*] Đang dừng Wazuh Webhook Server...")
         self._stop_event.set()
         self.manager.running = False
+        if self.manager._worker_thread and self.manager._worker_thread.is_alive():
+            self.manager._worker_thread.join(timeout=2.0)
+        if self.manager._ai_worker_thread and self.manager._ai_worker_thread.is_alive():
+            self.manager._ai_worker_thread.join(timeout=2.0)
         self.manager._save_state()
         if self.httpd:
             self.httpd.shutdown()

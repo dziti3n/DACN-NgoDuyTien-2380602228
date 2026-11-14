@@ -3,7 +3,7 @@
 > **Đề tài:** Xây dựng hệ thống Single-Agent AI tự trị hỗ trợ giám sát, truy vết và tự động điều phối phản ứng sự cố an ninh mạng  
 > **Tác giả:** Ngô Duy Tiến  
 > **Chế độ vận hành:** 100% Cục bộ (Local Ollama LLM, không rò rỉ dữ liệu qua Cloud API)  
-> **Cập nhật ngày:** 24/10/2026
+> **Cập nhật ngày:** 12/11/2026
 
 ---
 
@@ -757,15 +757,14 @@ Hiện tại, AI SOC Agent đang vận hành ổn định trên mô hình **Olla
 
 - [x] **Giai đoạn 1 (Đã hoàn tất):** Xây dựng Core ReAct Agent, Policy Engine, UFW Safe Wrapper, Giao diện 100vh và tích hợp Event-Driven Webhook với Wazuh SIEM 4.9.2.
 - [x] **Giai đoạn 2 (Đã hoàn tất):** Chuẩn hóa kiến trúc Zero-Trust (loại bỏ SSH đọc log endpoint), xây dựng công cụ `query_wazuh_history` tra cứu lịch sử tập trung từ Wazuh SIEM.
-- [ ] **Giai đoạn 3 (Tuần 5 - Trọng tâm hiện tại):**
-  - [ ] Thực hiện bài test tấn công thực tế Kịch bản 1 (SSH brute-force bằng Hydra từ Kali Linux) và chụp bộ 4 ảnh minh chứng thực nghiệm.
-  - [ ] Bật lưu trữ JSON archive trên Wazuh Manager (`<jsonout_output>yes</jsonout_output>`) để phục vụ tra cứu lịch sử đầy đủ.
-- [ ] **Giai đoạn 4 (Tuần 6):**
-  - [ ] Triển khai Kịch bản 3 (Reverse Shell) và Kịch bản 4 (Crontab Persistence).
-  - [ ] Thử nghiệm lượng tử hóa GGUF Q3 cho mô hình 7B trên GPU RTX 3050.
-- [ ] **Giai đoạn 5 (Tuần 7 & Hoàn thiện):**
-  - [ ] Chạy Benchmark 40 kịch bản, trích xuất ma trận nhầm lẫn (Confusion Matrix).
-  - [ ] Hoàn thiện toàn bộ số liệu thực nghiệm vào Báo cáo Đồ án và Slide bảo vệ.
+- [x] **Giai đoạn 3 (Tuần 4 & Tuần 5 - Đã hoàn tất nâng cấp mã nguồn):**
+  - [x] Thực hiện test tấn công Hydra SSH từ Kali Linux (`192.168.56.10`) và bật lưu trữ JSON Archive trên Wazuh Manager.
+  - [x] Tái cấu trúc Hybrid 2 Tầng: đặt Local LLM (`qwen3:4b`) về Tầng 2 bất đồng bộ không thời gian thực; bổ sung `core/correlator.py` xử lý tấn công nhiều bước + Anti-Lockout tránh chặn nhầm Admin; tạo `scripts/compare_wazuh_vs_agent.py` đối sánh trực tiếp với Wazuh Active Response mặc định.
+- [ ] **Giai đoạn 4 (Kiểm thử tay thực tế trên VM):**
+  - [ ] Cập nhật `setup_wazuh_integration.sh` (Rule `5715, 5902`) & `setup_lab_guardrails.sh` (`soc-kill-session`) trên Ubuntu Server.
+  - [ ] Chạy test tay 3 ca trực tiếp trên VM (Tấn công nhiều bước, Admin gõ sai mật khẩu không chặn nhầm, Hydra đo tốc độ Tầng 1 vs Tầng 2) và chụp ảnh minh chứng.
+- [ ] **Giai đoạn 5 (Hoàn thiện Đồ án):**
+  - [ ] Tổng hợp số liệu thực tế từ VM vào Báo cáo Đồ án và Slide bảo vệ.
 
 ---
 *Tài liệu này luôn được cập nhật đồng bộ với mã nguồn thực tế của dự án.*
@@ -831,3 +830,22 @@ Hiện tại, AI SOC Agent đang vận hành ổn định trên mô hình **Olla
   - Phản hồi tương tác mô phỏng tức thời (0ms delay) với `st.toast()`, không gọi lệnh SSH chặn thật làm đơ giao diện đúng như chú thích của bản thiết kế.
   - Kiểm tra tự động bằng `streamlit.testing.v1.AppTest` xác nhận script chạy hoàn tất trong 0.5s, không có bất kỳ exception nào.
   - 70/70 bài kiểm thử tự động toàn dự án tiếp tục đạt 100% PASS.
+
+---
+
+### 8. Chi Tiết Nâng Cấp Phiên 18 (Tuần 5 - 12/11/2026): Kiến Trúc Hybrid 2 Tầng — Xử Lý Tấn Công Nhiều Bước, Chống Chặn Nhầm & Non-Real-Time LLM
+- [x] **Tái cấu trúc theo đúng 4 góp ý chuyên môn của Giảng viên hướng dẫn:**
+  1. **Đặt Local LLM ở bước KHÔNG cần thời gian thực (`integrations/wazuh_listener.py`):**
+     - **Tầng 1 (`alert_queue`):** Thực thi `KillChainCorrelator` + `PolicyEngine` + `block_ip` / `terminate_user_sessions` tức thì (`~7.85 ms` logic quyết định), tuyệt đối không chờ Local LLM (`17.48s` trên RTX 3050 do offload `~1.19 GB` ra CPU/RAM).
+     - **Tầng 2 (`ai_queue`, `_ai_worker_loop`):** Chạy `qwen3:4b` bất đồng bộ ở hậu cảnh để điều tra lịch sử (`query_wazuh_history`), gắn MITRE ATT&CK, rà soát các ca nhập nhằng (`DEFER_TO_LLM`) và gửi Email HTML.
+  2. **Bộ tương quan tấn công nhiều bước (`core/correlator.py`):**
+     - Nối chuỗi `Dò mật khẩu (kể cả Low-and-Slow <8 lần)` ➔ `Đăng nhập thành công (Rule 5715)` ➔ `Leo quyền Sudo / Sửa file nhạy cảm (5402/5404/5405/550)`.
+     - Tự động truy ngược `src_ip` khi log `sudo`/`FIM` không chứa IP và hỗ trợ ngắt phiên SSH bị xâm nhập (`terminate_user_sessions`, `/usr/local/sbin/soc-kill-session`).
+  3. **Bảo vệ chống chặn nhầm (`ANTI-LOCKOUT GUARD` trong `core/correlator.py` & `core/policy_engine.py`):**
+     - Không tự khóa nhầm tài khoản quản trị trong `config/baseline.json` khi gõ sai mật khẩu SSH (`Rule 5763`) hoặc `sudo` (`Rule 5404`) theo nhịp độ con người; vẫn chặn ngay nếu phát hiện tốc độ tool Hydra (`<0.9s`), rà user lạ (`5710`) hoặc leo quyền Stage 3.
+  4. **Bộ đánh giá đối sánh định lượng với Wazuh Active Response mặc định (`scripts/compare_wazuh_vs_agent.py`, `cli.py benchmark-compare`):**
+     - Kết quả trên 16 chuỗi kịch bản (`test_mode` mô phỏng UFW): Wazuh mặc định có tỷ lệ chặn nhầm Admin `40.0% (2/5)`, xử lý nhiều bước `0.0% (0/4)`; AI Agent Hybrid mới đạt chặn nhầm **`0.0% (0/5)`**, nhiều bước **`100.0% (4/4)`**, thời gian quyết định Tầng 1 **`7.85 ms`**.
+- [x] **Kiểm thử & Báo cáo Tuần 5:**
+  - Cập nhật [`BAO_CAO_TUAN_5.md`](file:///d:/soc-agent/BAO_CAO_TUAN_5.md), [`README.md`](file:///d:/soc-agent/README.md), [`scripts/setup_wazuh_integration.sh`](file:///d:/soc-agent/scripts/setup_wazuh_integration.sh) (bổ sung Rule `5715, 5902`), [`scripts/setup_lab_guardrails.sh`](file:///d:/soc-agent/scripts/setup_lab_guardrails.sh) (bổ sung `soc-kill-session`).
+  - Toàn bộ kiểm thử sau chỉnh sửa cuối cùng đạt **65/65 Unit/Integration tests PASS**, **11/11 Detection rules PASS**, và `security_audit.py` đạt **0 lỗi rò rỉ**.
+- [ ] **Kế hoạch ngày kế tiếp:** Chạy kiểm thử tay trực tiếp trên VM (không dùng script giả lập) theo checklist trong `BAO_CAO_TUAN_5.md`.

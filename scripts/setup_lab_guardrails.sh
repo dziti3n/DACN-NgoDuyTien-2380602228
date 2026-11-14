@@ -79,11 +79,36 @@ chmod 0750 /usr/local/sbin/soc-unblock-ip
 chown root:root /usr/local/sbin/soc-unblock-ip
 echo "[+] Đã tạo /usr/local/sbin/soc-unblock-ip thành công."
 
+# 2.5. Tạo script ngắt phiên SSH tài khoản bị xâm nhập: /usr/local/sbin/soc-kill-session
+cat << 'EOF' > /usr/local/sbin/soc-kill-session
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_USER="${1:-}"
+if [[ -z "$TARGET_USER" ]] || ! [[ "$TARGET_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    echo "ERROR: Tên tài khoản không hợp lệ." >&2
+    exit 1
+fi
+
+for prot in "root" "agent_soc" "wazuh" "sshd" "daemon" "www-data"; do
+    if [[ "$TARGET_USER" == "$prot" ]]; then
+        echo "SECURITY ERROR: Cấm ngắt phiên tài khoản hệ thống '$TARGET_USER'." >&2
+        exit 2
+    fi
+done
+
+/usr/bin/pkill -KILL -u "$TARGET_USER" sshd 2>/dev/null || true
+echo "SUCCESS: Terminated SSH sessions for user '$TARGET_USER'"
+EOF
+
+chmod 0750 /usr/local/sbin/soc-kill-session
+chown root:root /usr/local/sbin/soc-kill-session
+echo "[+] Đã tạo /usr/local/sbin/soc-kill-session thành công."
+
 # 3. Cập nhật cấu hình sudoers tối thiểu: /etc/sudoers.d/soc_agent_ufw
-# CHỈ cho phép chạy 2 script wrapper trên và lệnh xem trạng thái ufw, KHÔNG cho phép chạy /usr/sbin/ufw tự do!
 cat << 'EOF' > /etc/sudoers.d/soc_agent_ufw
 # Đặc quyền tối thiểu cho agent_soc (Least Privilege Guardrails)
-agent_soc ALL=(ALL) NOPASSWD: /usr/local/sbin/soc-block-ip, /usr/local/sbin/soc-unblock-ip, /usr/sbin/ufw status numbered, /usr/sbin/ufw status
+agent_soc ALL=(ALL) NOPASSWD: /usr/local/sbin/soc-block-ip, /usr/local/sbin/soc-unblock-ip, /usr/local/sbin/soc-kill-session, /usr/sbin/ufw status numbered, /usr/sbin/ufw status
 EOF
 
 chmod 0440 /etc/sudoers.d/soc_agent_ufw

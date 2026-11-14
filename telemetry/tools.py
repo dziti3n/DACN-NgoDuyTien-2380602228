@@ -502,6 +502,36 @@ def verify_response(ip: str, expected_state="blocked"):
         return _err(tool, ex)
 
 
+def terminate_user_sessions(username: str):
+    """
+    Chấm dứt phiên SSH đang hoạt động của tài khoản bị xâm nhập (Multi-Step Kill-Chain Containment).
+    Sử dụng wrapper script an toàn /usr/local/sbin/soc-kill-session (không chạm vào root/agent_soc).
+    """
+    tool = "terminate_user_sessions"
+    try:
+        clean_user = (username or "").strip()
+        if not USER_RE.match(clean_user) or clean_user in {"root", "agent_soc", "wazuh", "sshd"}:
+            return _err(tool, f"Từ chối ngắt phiên tài khoản được bảo vệ hoặc không hợp lệ: '{username}'")
+
+        cmd_wrapper = f"sudo -n /usr/local/sbin/soc-kill-session {clean_user}"
+        out, err = run_fixed_command(cmd_wrapper)
+
+        if "command not found" in err or "No such file" in err or "not found" in out:
+            cmd_fallback = f"sudo -n /usr/bin/pkill -KILL -u {clean_user} sshd"
+            out, err = run_fixed_command(cmd_fallback)
+
+        if "a password is required" in err or "password is required" in out:
+            return _err(tool, "Chưa cấp quyền NOPASSWD sudo cho /usr/local/sbin/soc-kill-session")
+
+        return _ok(tool, {
+            "terminated_user": clean_user,
+            "command": cmd_wrapper,
+            "output": (out or err).strip() or "Session termination dispatched",
+        })
+    except Exception as ex:
+        return _err(tool, ex)
+
+
 # Danh mục các công cụ điều tra của Agent (Read-Only)
 INVESTIGATION_TOOLS = {
     "search_auth_logs": search_auth_logs,
@@ -519,6 +549,7 @@ RESPONSE_TOOLS = {
     "block_ip": block_ip,
     "unblock_ip": unblock_ip,
     "verify_response": verify_response,
+    "terminate_user_sessions": terminate_user_sessions,
 }
 
 # Tương thích ngược

@@ -196,9 +196,19 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None, lo
                 risk_level="CRITICAL"
             )
 
-        # d. Kiểm tra ngưỡng bằng chứng (Evidence Threshold)
+        # d. Kiểm tra ngữ cảnh Anti-Lockout & ngưỡng bằng chứng (Evidence Threshold)
         verdict = context.get("verdict")
         confidence = context.get("confidence", "low")
+
+        if context.get("is_false_positive_protected") or context.get("correlation_route") == "DEFER_TO_LLM":
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=target,
+                reason="Từ chối tự động chặn (ANTI-LOCKOUT GUARD): Phát hiện ngữ cảnh tài khoản quản trị hợp lệ có dấu hiệu gõ nhầm mật khẩu; chuyển AI ngoại tuyến xem xét tránh khóa nhầm Admin.",
+                requires_approval=True,
+                risk_level="LOW"
+            )
         
         if verdict == "benign_likely":
             return PolicyDecision(
@@ -262,6 +272,47 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None, lo
             risk_level="MEDIUM"
         )
 
+    # 3. Thẩm định hành động cô lập phiên/tài khoản bị xâm nhập (Multi-Step Kill-Chain)
+    elif action in ("terminate_session", "lock_user"):
+        protected_users = {"root", "agent_soc", "sshd", "wazuh", "daemon", "www-data", "nobody", "sync"}
+        cleaned_user = (target or "").strip()
+        if not re.match(r"^[a-z_][a-z0-9_-]{0,31}$", cleaned_user):
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=target,
+                reason=f"Từ chối: Tên tài khoản '{target}' không hợp lệ (chống Command Injection).",
+                requires_approval=True,
+                risk_level="HIGH"
+            )
+        if cleaned_user in protected_users:
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=cleaned_user,
+                reason=f"TỪ CHỐI BẢO MẬT: Tài khoản hệ thống '{cleaned_user}' nằm trong danh sách bảo vệ sống còn.",
+                requires_approval=True,
+                risk_level="CRITICAL"
+            )
+        stage = int(context.get("kill_chain_stage") or 0)
+        if stage < 2:
+            return PolicyDecision(
+                allowed=False,
+                action=action,
+                target=cleaned_user,
+                reason="Từ chối: Chỉ được phép ngắt phiên/khóa tài khoản khi đã xác nhận chuỗi xâm nhập nhiều bước (Stage >= 2).",
+                requires_approval=True,
+                risk_level="MEDIUM"
+            )
+        return PolicyDecision(
+            allowed=True,
+            action=action,
+            target=cleaned_user,
+            reason=f"Hợp lệ (Kill-Chain Stage {stage}): Cho phép cô lập phiên/tài khoản bị xâm nhập '{cleaned_user}' để chặn leo thang đặc quyền.",
+            requires_approval=(action == "lock_user"),
+            risk_level="CRITICAL"
+        )
+
     # Các hành động chưa được hỗ trợ hoặc không nằm trong danh mục
     return PolicyDecision(
         allowed=False,
@@ -277,12 +328,17 @@ def evaluate_action(action: str, target: str, context: Optional[dict] = None, lo
 # QUẢN LÝ THỜI HẠN CÁCH LY IP (TTL MANAGEMENT)
 # ==============================================================
 
-def get_active_blocks_file(log_dir: str = "runs") -> str:
-    os.makedirs(log_dir, exist_ok=True)
-    return os.path.join(log_dir, "active_blocks.json")
+def _resolve_log_dir(log_dir: Optional[str] = None) -> str:
+    return log_dir or os.getenv("SOC_RUNS_DIR", "runs")
 
 
-def load_active_blocks(log_dir: str = "runs") -> Dict[str, Any]:
+def get_active_blocks_file(log_dir: Optional[str] = None) -> str:
+    effective = _resolve_log_dir(log_dir)
+    os.makedirs(effective, exist_ok=True)
+    return os.path.join(effective, "active_blocks.json")
+
+
+def load_active_blocks(log_dir: Optional[str] = None) -> Dict[str, Any]:
     path = get_active_blocks_file(log_dir)
     if not os.path.exists(path):
         return {}
@@ -298,7 +354,7 @@ def save_active_block(
     ttl_minutes: int = DEFAULT_BLOCK_TTL_MINUTES,
     reason: str = "",
     operator: str = "SOC Analyst",
-    log_dir: str = "runs"
+    log_dir: Optional[str] = None
 ) -> Dict[str, Any]:
     """Lưu trữ thông tin chặn IP kèm thời gian hết hạn (TTL)."""
     blocks = load_active_blocks(log_dir)
@@ -322,7 +378,7 @@ def save_active_block(
     return entry
 
 
-def remove_active_block(ip: str, log_dir: str = "runs") -> bool:
+def remove_active_block(ip: str, log_dir: Optional[str] = None) -> bool:
     """Xóa IP khỏi danh sách theo dõi khi đã gỡ chặn."""
     blocks = load_active_blocks(log_dir)
     if ip in blocks:
@@ -334,7 +390,7 @@ def remove_active_block(ip: str, log_dir: str = "runs") -> bool:
     return False
 
 
-def get_expired_blocks(log_dir: str = "runs") -> List[str]:
+def get_expired_blocks(log_dir: Optional[str] = None) -> List[str]:
     """Tìm danh sách các IP đã hết hạn thời gian cách ly để tiến hành tự động gỡ bỏ."""
     blocks = load_active_blocks(log_dir)
     now = datetime.now()
@@ -359,13 +415,14 @@ def record_audit_log(
     policy_decision: Optional[PolicyDecision] = None,
     execution_result: Optional[dict] = None,
     verification_result: Optional[dict] = None,
-    log_dir: str = "runs"
+    log_dir: Optional[str] = None
 ):
     """
     Ghi nhật ký kiểm toán có cấu trúc (Structured Audit Trail) vào cả
     file log dễ đọc (action_audit.log) và JSON Lines (audit_trail.jsonl).
     """
-    os.makedirs(log_dir, exist_ok=True)
+    effective = _resolve_log_dir(log_dir)
+    os.makedirs(effective, exist_ok=True)
     now_str = datetime.now().isoformat(timespec="seconds")
 
     audit_entry = {
@@ -379,12 +436,12 @@ def record_audit_log(
     }
 
     # 1. Ghi file JSON Lines (phục vụ SIEM / Audit Tooling)
-    jsonl_path = os.path.join(log_dir, "audit_trail.jsonl")
+    jsonl_path = os.path.join(effective, "audit_trail.jsonl")
     with open(jsonl_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
 
     # 2. Ghi file Text Log truyền thống
-    text_path = os.path.join(log_dir, "action_audit.log")
+    text_path = os.path.join(effective, "action_audit.log")
     with open(text_path, "a", encoding="utf-8") as f:
         status_str = "SUCCESS" if (execution_result and execution_result.get("status") in ("ok", "success")) else "FAILED"
         verified_str = "VERIFIED" if (verification_result and verification_result.get("verified")) else "UNVERIFIED"

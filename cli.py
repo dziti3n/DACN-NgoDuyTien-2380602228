@@ -532,6 +532,19 @@ def cmd_benchmark(args):
 
     run_benchmark(verbose=True, mock_mode=use_mock, limit=getattr(args, "limit", None))
 
+
+def cmd_benchmark_compare(args):
+
+    """Chạy so sánh định lượng: Wazuh Active Response mặc định vs AI SOC Agent Hybrid Mới."""
+
+    from scripts.compare_wazuh_vs_agent import run_comparison
+
+    run_comparison(
+        live_llm=getattr(args, "live_llm", False),
+        llm_sec=getattr(args, "llm_sec", 15.2),
+        verbose=getattr(args, "verbose", False),
+    )
+
 def cmd_test_email(args):
 
     """Kiểm tra kết nối và gửi thử nghiệm Email cảnh báo qua Gmail SMTP."""
@@ -720,6 +733,18 @@ def main():
     p_bench.add_argument("--limit", type=int, default=None, help="Giới hạn số kịch bản đánh giá (ví dụ: --limit 5)")
 
     p_bench.set_defaults(func=cmd_benchmark)
+
+    # Lệnh: benchmark-compare (So sánh trực tiếp với Wazuh Active Response mặc định)
+
+    p_cmp = subparsers.add_parser("benchmark-compare", help="So sánh định lượng với Wazuh Active Response mặc định (Thời gian chặn, Tỷ lệ chặn nhầm, Đa bước)")
+
+    p_cmp.add_argument("--live-llm", action="store_true", help="Đo thời gian thực tế với Local Ollama qwen3:4b ở Tầng 2")
+
+    p_cmp.add_argument("--llm-sec", type=float, default=15.2, help="Độ trễ LLM tham chiếu của phần cứng (giây)")
+
+    p_cmp.add_argument("-v", "--verbose", action="store_true", help="Hiển thị log xử lý chi tiết")
+
+    p_cmp.set_defaults(func=cmd_benchmark_compare)
 
     args = parser.parse_args()
 

@@ -30,9 +30,8 @@ load_dotenv()
 from integrations.wazuh_listener import normalize_wazuh_alert, fast_path_triage
 from core.agent import investigate
 from core.policy_engine import evaluate_action, is_protected_ip
-import tools
-import read_logs
-import agent
+from telemetry import tools, read_logs
+from core import agent
 
 RUNS_DIR = Path("runs")
 BENCHMARK_REPORT = RUNS_DIR / "benchmark_results.json"

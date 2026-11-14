@@ -37,42 +37,27 @@ auth.log trên endpoint
                                  agent yêu cầu backend truy vấn lịch sử (query_wazuh_history)
 ```
 
-### Phân Định Rõ Ràng 2 Giai Đoạn Điều Tra Của Agent:
-1. **Phân tích Alert hiện tại:** Listener nhận gói tin alert JSON từ Webhook; Agent đọc `full_log`, `rule.id`, `rule.level`, địa chỉ IP nguồn (`srcip`), tài khoản (`dstuser`), thời gian và các trường metadata thực tế có trong alert.  
-   *(Lưu ý học thuật quan trọng: `full_log` chỉ là dòng log thô kích hoạt sự kiện vi phạm hiện tại, tuyệt đối không mặc định nó chứa toàn bộ lịch sử đăng nhập trước đó của tài khoản).*
-2. **Tra cứu lịch sử & tương quan sự kiện:** Khi Agent cần xác minh xem trước đó IP hoặc tài khoản này đã từng đăng nhập thành công hay có chuỗi thất bại kéo dài hay chưa, Agent gọi công cụ chỉ đọc `query_wazuh_history` để tìm các sự kiện liên quan trong **kho dữ liệu Alert & Archive tập trung của Wazuh SIEM**, hoàn toàn **không kết nối SSH vào endpoint**.
-3. **Xác nhận thành phần thu thập:** Trên máy ảo Ubuntu 24.04 All-in-One (`192.168.56.101`), Wazuh Manager tự thu thập `/var/log/auth.log` thông qua module nội bộ `logcollector` (khai báo `<localfile>` trong `ossec.conf`), định danh agent cục bộ là `agent.id: 001` (`ubuntu-lab`).
+### Kiến trúc Hybrid 2 Tầng (Real-Time Defense + Non-Real-Time LLM):
+1. **Tầng 1 — Phản ứng thời gian thực (`< 0.5s`, KHÔNG chờ LLM):**
+   - `integrations/wazuh_listener.py` nhận alert JSON từ Wazuh Webhook (`5710/5711/5712/5715/5760/5763/5401..5405/550/5902`), trả HTTP 200 trong `<5ms`.
+   - `core/correlator.py` (**Stateful Kill-Chain Correlator + Anti-Lockout Guard**) nối chuỗi tấn công nhiều bước (*Dò mật khẩu ➔ Đăng nhập thành công ➔ Leo quyền Sudo/FIM*, kể cả *Low-and-Slow <8 lần*), truy ngược IP nguồn khi log `sudo`/`FIM` thiếu IP, đồng thời lọc không khóa nhầm Admin gõ sai mật khẩu.
+   - `core/policy_engine.py` thẩm định Whitelist/Rate-limit và kích hoạt **UFW Block IP + Ngắt phiên SSH bị xâm nhập** ngay lập tức mà không đợi mô hình AI.
+2. **Tầng 2 — Phân tích AI bất đồng bộ (`~15–20s`, Non-Real-Time Background Worker):**
+   - `_ai_worker_loop` đưa tác vụ nặng của Local LLM (`qwen3:4b`) ra khỏi đường găng thời gian thực:
+     - **Hậu kiểm sau chặn:** Phân tích chuỗi sự kiện qua `query_wazuh_history`, gắn mã MITRE ATT&CK và gửi Email HTML chi tiết về Gmail Admin.
+     - **Thẩm định ca nhập nhằng (`DEFER_TO_LLM`):** Kiểm tra sâu các ca Admin nghi gõ nhầm mật khẩu để đảm bảo `0%` khóa nhầm quản trị viên.
+3. **Xác nhận thành phần thu thập:** Trên máy ảo Ubuntu 24.04 All-in-One (`192.168.56.101`), Wazuh Manager tự thu thập `/var/log/auth.log` thông qua module nội bộ `logcollector` (định danh cục bộ `agent.id: 001` — `ubuntu-lab`), tuyệt đối **không SSH từ Agent để đọc log thô**.
 
-│               ┌──────────────────────────────────────────┴────────────────┐     │
-
-│               ▼ Gửi báo động HTML                         ▼ Thực thi SSH  │     │
-
-│  ┌─────────────────────────┐         ┌────────────────────────────────┐   │     │
-
-│  │    notifier.py          │         │    tools.py (Active Defense)   │   │     │
-
-│  │    • Gmail SMTP 587     │         │    • /usr/local/sbin/soc-block │   │     │
-
-│  │    • HTML Alert Report  │         │    • Cô lập IP UFW có thời hạn │   │     │
-
-│  │    • Ngưỡng lọc báo bão │         │    • Tự động mở khóa sau 15p   │   │     │
-
-│  └─────────────────────────┘         └────────────────────────────────┘   │     │
-
-│                                                                                 │
-
-│  ┌───────────────────────────────────────────────────────────────────────────┐  │
-
-│  │  app.py: Giao Diện Bàn Điều Khiển AI SOC (Streamlit Dark Console 50% / 50%)│  │
-
-│  │  • Cyber Terminal Live Streamer    • Hàng đợi sự cố thực tế từ Wazuh      │  │
-
-│  │  • Trực quan hóa suy luận ReAct    • Thẩm định Policy & Bảng điều khiển UFW│  │
-
-│  └───────────────────────────────────────────────────────────────────────────┘  │
-
-└─────────────────────────────────────────────────────────────────────────────────┘
-
+```text
+[Wazuh Alert Stream] ──► Webhook :5000 ──► [TẦNG 1: Real-Time Correlator & Policy (<10ms)]
+                                               ├── Lành hợp lệ (Fast-Path) ──► Bỏ qua LLM (<1ms)
+                                               ├── Admin gõ nhầm (Anti-Lockout) ──► KHÔNG chặn; đẩy Tầng 2 rà soát
+                                               └── Brute Force / Multi-Step ──► Chặn UFW + Ngắt phiên NGAY (<0.5s)
+                                                                                     │
+                                                                                     ▼ (Hàng đợi nền)
+                                                                     [TẦNG 2: Local LLM (qwen3:4b ~15s)]
+                                                                     • Phân tích Kill-Chain & MITRE ATT&CK
+                                                                     • Gửi Email báo cáo HTML qua Gmail SMTP
 ```
 
 
@@ -158,74 +143,35 @@ Mã Python độc lập thẩm định mọi hành động đề xuất trước
 ```text
 
 soc-agent/
-
 ├── core/                        # Trọng tâm AI SOC Agent & Lớp an toàn xác định
-
 │   ├── agent.py                 # Động cơ điều tra ReAct, System Prompt & trích xuất kết luận
-
+│   ├── correlator.py            # Bộ tương quan tấn công nhiều bước & Anti-Lockout Context Guard
 │   ├── llm_client.py            # Client giao tiếp mô hình LLM cục bộ (Ollama)
-
-│   └── policy_engine.py         # Lớp kiểm soát an toàn xác định (Whitelist, TTL, Rate Limit)
-
-│
-
-├── integrations/                # Cổng tiếp nhận SIEM, Giám sát tự hành & Báo động
-
-│   ├── wazuh_listener.py        # Webhook Server đón nhận Alert từ Wazuh & Fast-Path Triage
-
+│   ├── policy_engine.py         # Lớp kiểm soát an toàn xác định (Whitelist, TTL, Rate Limit, Session Containment)
+│   └── schema.py                # Data Models & Converters cho SOC Command Center
+├── integrations/                # Cổng tiếp nhận SIEM, Hàng đợi Hybrid & Báo động
+│   ├── wazuh_listener.py        # Webhook Hybrid 2 tầng (Tầng 1 Real-Time + Tầng 2 AI Non-Real-Time)
 │   ├── monitor_daemon.py        # Tiến trình giám sát an ninh tự hành liên tục
-
 │   └── notifier.py              # Sinh báo cáo HTML và gửi thư cảnh báo qua Gmail SMTP
-
-│
-
 ├── telemetry/                   # Thu thập nhật ký, bóc tách & Công cụ phản ứng an ninh
-
-│   ├── tools.py                 # 6 Công cụ trinh sát chỉ đọc + 4 Công cụ phản ứng UFW
-
+│   ├── tools.py                 # Công cụ truy vấn SIEM + Phản ứng UFW & Ngắt phiên xâm nhập
 │   ├── log_parser.py            # Bóc tách cú pháp nhật ký xác thực Linux /var/log/auth.log
-
-│   ├── read_logs.py             # Kết nối SSH cố định qua Paramiko
-
-│   └── detection.py             # Bộ quy tắc phát hiện cảnh báo dự phòng cục bộ
-
-│
-
+│   ├── read_logs.py             # Kết nối SSH cố định qua Paramiko cho wrapper phản ứng
+│   └── detection.py             # Bộ quy tắc phát hiện & chữ ký lệnh sudo nguy hiểm
 ├── config/                      # Danh mục dữ liệu chuẩn & Ranh giới an toàn
-
-│   └── baseline.json            # Danh sách tài khoản người dùng và nhóm quyền hợp lệ
-
-│
-
-├── scripts/                     # Kịch bản triển khai & Cấu hình máy chủ
-
-│   ├── setup_wazuh_integration.sh # Cấu hình Webhook Integration trên Wazuh Manager
-
-│   ├── setup_lab_guardrails.sh    # Phân quyền sudoers tối thiểu & Wrapper scripts trên Ubuntu
-
+│   └── baseline.json            # Danh sách tài khoản quản trị viên và quyền sudo hợp lệ
+├── scripts/                     # Kịch bản triển khai & Đánh giá đối sánh định lượng
+│   ├── setup_wazuh_integration.sh # Cấu hình Webhook trên Wazuh (bao gồm Rule 5715, 5902)
+│   ├── setup_lab_guardrails.sh    # Wrapper scripts (/usr/local/sbin/soc-block-ip, soc-kill-session)
 │   ├── setup_windows_firewall.ps1 # Mở cổng tường lửa Windows 5000 cho Webhook
-
-│   ├── benchmark_wazuh.py         # Đánh giá định lượng hiệu năng và độ chính xác
-
-│   └── security_audit.py        # Quét kiểm tra an toàn mã nguồn, chống rò rỉ Secret / Token
-
-│
-
+│   ├── benchmark_wazuh.py         # Đánh giá định lượng hiệu năng và độ chính xác (40 kịch bản)
+│   ├── compare_wazuh_vs_agent.py  # So sánh trực tiếp Wazuh mặc định vs AI SOC Agent Hybrid
+│   └── security_audit.py          # Quét kiểm tra an toàn mã nguồn, chống rò rỉ Secret / Token
 ├── app.py                       # Bàn điều khiển tác chiến AI SOC Command Center (Streamlit UI)
-
 ├── cli.py                       # Giao diện dòng lệnh hợp nhất (Unified CLI)
-
-├── requirements.txt             # Danh mục thư viện Python
-
-├── .env.example                 # File mẫu biến môi trường
-
-├── .gitignore                   # Cấu hình loại trừ file rác & dữ liệu nội bộ
-
-├── README.md                    # Tài liệu dự án
-
-├── WORKLOG.md                   # Sổ tay tiến độ và hướng dẫn thao tác
-
-└── BAO_CAO_TUAN_3.md            # Báo cáo tiến độ tuần 3 cho giảng viên hướng dẫn
+├── BAO_CAO_TUAN_3.md            # Báo cáo tiến độ tuần 3
+├── BAO_CAO_TUAN_4.md            # Báo cáo tiến độ tuần 4
+└── BAO_CAO_TUAN_5.md            # Báo cáo tiến độ tuần 5 (Hybrid 2 tầng & Kế hoạch test VM thực tế)
 
 ```
 
@@ -361,37 +307,37 @@ Mở cửa sổ PowerShell khác và chạy:
 
 
 
-#### Cách 4: Chạy Toàn Bộ Bộ Kiểm Thử An Toàn (54 Tests)
+#### Cách 4: Chạy Toàn Bộ Bộ Kiểm Thử An Toàn & So Sánh Với Wazuh Mặc Định
 
 ```powershell
-
+# Chạy toàn bộ 65 Unit/Integration tests + 11 Detection rules + Security Audit
 .venv\Scripts\python.exe cli.py test
 
+# Chạy bảng so sánh định lượng: Wazuh Active Response mặc định vs AI SOC Agent Hybrid
+.venv\Scripts\python.exe cli.py benchmark-compare
 ```
-
-
 
 ---
 
+## 🎯 So Sánh Với Wazuh Active Response Mặc Định (Trên Bộ 16 Chuỗi Kịch Bản)
 
+| Hệ thống | Thời gian quyết định / ngăn chặn | Tỷ lệ chặn nhầm Admin | Tỷ lệ chặn tấn công | Xử lý tấn công nhiều bước | Vị trí chạy LLM |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **Wazuh Mặc Định** *(Active Response)* | **18.06 ms** *(nội bộ)* | **40.0%** *(2/5 ca)* | **62.5%** *(5/8)* | **0.0%** *(0/4)* | Không có AI |
+| **AI Agent Cũ** *(Đồng bộ trước khi chặn)* | **15.42 s** *(đợi AI)* | **40.0%** *(2/5 ca)* | **62.5%** *(5/8)* | **0.0%** *(0/4)* | Chạy đồng bộ trước khi chặn |
+| **AI Agent Mới** *(Hybrid 2 Tầng)* | **7.85 ms** *(logic Tầng 1)* | **0.0%** *(0/5 ca)* | **100.0%** *(8/8)* | **100.0%** *(4/4)* | Chạy nền Tầng 2 *(không làm trễ)* |
+
+*(Ghi chú: Đo trên bộ kịch bản mô phỏng ở chế độ `test_mode`; khi thực thi trên Ubuntu thực tế Tầng 1 cộng thêm ~0.2–0.4s độ trễ SSH UFW.)*
 
 ## 🎯 Kiểm Thử Thực Nghiệm Trên Hệ Thống Thật
 
-
-
-| STT | Kịch Bản Thử Nghiệm | Thao Tác Thực Hiện | Kết Quả Thực Tế |
-
+| STT | Kịch Bản Thử Nghiệm | Thao Tác Thực Hiện | Kết Quả Kỳ Vọng |
 | :---: | :--- | :--- | :--- |
-
-| **1** | **Bảo trì hệ thống hợp lệ** | Trên Ubuntu gõ: `sudo apt update` | **Fast-Path Triage** xử lý trong **0.3ms**, không gọi LLM, không gửi email rác. |
-
-| **2** | **Tấn công dò mật khẩu SSH** | Từ Windows gõ: `ssh hacker@192.168.56.101` (nhập sai pass) | Wazuh kích hoạt **Rule 5710/5712**, AI ReAct điều tra, UFW cô lập IP trong 15 phút, gửi 1 email báo động HTML. |
-
-| **3** | **Tấn công leo quyền trái phép** | Tạo user thường trên Ubuntu và gõ `sudo ls /root` | Wazuh bắt **Rule 5405** (User not in sudoers), Agent đánh giá mức độ High và ghi nhận chứng cứ. |
-
-| **4** | **Kiểm tra chống tự khóa (Anti-Lockout)** | Đề xuất chặn IP máy Host `192.168.56.1` hoặc máy Lab | **Policy Engine từ chối 100%**, bảo vệ hệ thống không bao giờ bị mất kết nối quản trị. |
-
-| **5** | **Tự động mở khóa TTL** | Chờ hết 15 phút sau khi một IP bị chặn | Scheduler tự động gỡ luật trên UFW, cập nhật trạng thái `unblocked` vào audit trail. |
+| **1** | **Bảo trì hệ thống hợp lệ** | Trên Ubuntu gõ: `sudo apt update` | **Fast-Path Triage** xử lý trong **<1ms**, không gọi LLM, không gửi email rác. |
+| **2** | **Tấn công Brute Force SSH** | Từ Kali chạy Hydra nhắm `root@192.168.56.101` | Wazuh kích hoạt **Rule 5712**, Tầng 1 chặn IP UFW tức thì (**<1s**), Tầng 2 LLM phân tích nền & gửi Gmail. |
+| **3** | **Tấn công nhiều bước (Kill-Chain)** | Dò pass 4–5 lần ➔ Login thành công (`5715`) ➔ `sudo su -` | `KillChainCorrelator` nối 3 bước (kể cả khi log sudo thiếu IP), **chặn IP + ngắt phiên SSH**. |
+| **4** | **Admin gõ nhầm mật khẩu (Anti-Lockout)** | `admin_duytien` gõ sai pass 8 lần (`Rule 5763`) với nhịp tay người | **Không tự khóa nhầm Admin (`0%` FP)**, đẩy sang Tầng 2 LLM thẩm định ngữ cảnh. |
+| **5** | **Chống tự khóa & Mở khóa TTL** | Thử chặn IP Host Windows `192.168.56.1` hoặc chờ hết TTL 15 phút | **Policy Engine từ chối 100%** IP quản trị; IP tấn công tự gỡ chặn sau 15 phút. |
 
 
 
