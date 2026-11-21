@@ -44,6 +44,7 @@ Hệ thống đã kiểm chứng thành công trọn vẹn 3 kịch bản thực
 #### 📸 Hình ảnh minh chứng thực tế thu thập từ Lab:
 
 ![Kịch bản 1: Kali bị ngắt kết nối SSH khi leo quyền](docs/images/kali_multistep_terminated.png)
+
 *Hình 1: Kịch bản 1 — Kẻ tấn công trên Kali vừa gõ `sudo su -` lập tức bị Agent ngắt phiên và chặn IP triệt để.*
 
 ![Bản tin HTML cảnh báo an ninh chuẩn SOC](docs/images/email_alert_rendered.png)
@@ -55,6 +56,7 @@ Hệ thống đã kiểm chứng thành công trọn vẹn 3 kịch bản thực
 *Hình 3: Kịch bản 3 — Toàn trình vận hành: Tầng 1 kiểm tra thấy IP đã bị chặn và ngắt lặp lại, Tầng 2 AI phân tích hoàn tất và tự động gửi Email tới duytien0125@gmail.com.*
 
 ![Báo cáo phân tích chuyên sâu của AI cho Hydra](docs/images/hydra_root_bruteforce_report.png)
+
 *Hình 4: Kịch bản 3 — Tầng 2 AI đọc lịch sử Wazuh, đưa ra kết luận tấn công Brute Force 25 lần/phút.*
 
 ---
