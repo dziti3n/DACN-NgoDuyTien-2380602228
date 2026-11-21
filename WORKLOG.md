@@ -760,14 +760,36 @@ Hiện tại, AI SOC Agent đang vận hành ổn định trên mô hình **Olla
 - [x] **Giai đoạn 3 (Tuần 4 & Tuần 5 - Đã hoàn tất nâng cấp mã nguồn):**
   - [x] Thực hiện test tấn công Hydra SSH từ Kali Linux (`192.168.56.10`) và bật lưu trữ JSON Archive trên Wazuh Manager.
   - [x] Tái cấu trúc Hybrid 2 Tầng: đặt Local LLM (`qwen3:4b`) về Tầng 2 bất đồng bộ không thời gian thực; bổ sung `core/correlator.py` xử lý tấn công nhiều bước + Anti-Lockout tránh chặn nhầm Admin; tạo `scripts/compare_wazuh_vs_agent.py` đối sánh trực tiếp với Wazuh Active Response mặc định.
-- [ ] **Giai đoạn 4 (Kiểm thử tay thực tế trên VM):**
-  - [ ] Cập nhật `setup_wazuh_integration.sh` (Rule `5715, 5902`) & `setup_lab_guardrails.sh` (`soc-kill-session`) trên Ubuntu Server.
-  - [ ] Chạy test tay 3 ca trực tiếp trên VM (Tấn công nhiều bước, Admin gõ sai mật khẩu không chặn nhầm, Hydra đo tốc độ Tầng 1 vs Tầng 2) và chụp ảnh minh chứng.
-- [ ] **Giai đoạn 5 (Hoàn thiện Đồ án):**
-  - [ ] Tổng hợp số liệu thực tế từ VM vào Báo cáo Đồ án và Slide bảo vệ.
+- [x] **Giai đoạn 4 (Tuần 6 - Kiểm thử thực tế 100% trên 3 VM thật):**
+  - [x] Cập nhật `setup_wazuh_integration.sh` (Rule `5715, 5902`) & `setup_lab_guardrails.sh` (`soc-kill-session`) trên Ubuntu Server.
+  - [x] Chạy test tay 3 kịch bản thực tế trực tiếp trên 3 máy ảo (Tấn công nhiều bước, Admin gõ sai mật khẩu không chặn nhầm, Hydra đo tốc độ Tầng 1 vs Tầng 2) và thu thập trọn bộ ảnh minh chứng.
+  - [x] Hoàn thiện Báo cáo Tuần 6 (`BAO_CAO_TUAN_6.md`).
+- [ ] **Giai đoạn 5 (Hoàn thiện Đồ án & Thuyết trình):**
+  - [ ] Đưa số liệu và ảnh thực tế vào Báo cáo Đồ án tốt nghiệp.
+  - [ ] Soạn thảo Slide thuyết trình bảo vệ đồ án.
+  - [ ] Quay Video Clip Demo toàn trình 3 máy (2-3 phút).
 
 ---
 *Tài liệu này luôn được cập nhật đồng bộ với mã nguồn thực tế của dự án.*
+
+---
+
+### 9. Chi Tiết Thực Nghiệm Phiên 19 (Tuần 6 - 22/11/2026): Kiểm Thử Thực Tế 100% Bằng Tay Trên Lab 3 Máy Ảo
+- [x] **Môi trường Lab thực chiến:**
+  - Kali Linux (`192.168.56.10`): Máy tấn công.
+  - Ubuntu Server 22.04 / Wazuh Manager 4.9.2 (`192.168.56.101`): Máy chủ mục tiêu được bảo vệ.
+  - Windows Host (`192.168.56.1`): Máy trạm điều phối AI SOC Agent (Hybrid 2 Tầng).
+- [x] **Triển khai thành công 3 Kịch bản Thực tế:**
+  1. **Kịch bản 1 (Tấn công nhiều bước):**
+     - Kali dò mật khẩu 4 lần (<8 lần) ➔ Đăng nhập thành công SSH ➔ Gõ `sudo su -`.
+     - Agent Tầng 1 tự động truy vết ngược ra IP `192.168.56.10`, chèn lệnh UFW deny và thực thi `/usr/local/sbin/soc-kill-session admin_duytien` ngắt phiên SSH ngay lập tức (`docs/images/kali_multistep_terminated.png`).
+  2. **Kịch bản 2 (Chống chặn nhầm Admin & Ngưỡng an toàn):**
+     - Admin gõ sai mật khẩu được bảo vệ bởi `ANTI-LOCKOUT GUARD`.
+     - Khi vượt ngưỡng an toàn (thử dồn dập 23 lần): Agent kích hoạt phòng thủ chặn UFW, Tầng 2 AI gửi email cảnh báo về `duytien0125@gmail.com` và lưu bản tin HTML chuyên nghiệp (`docs/images/tier2_ai_email_sent.png`, `docs/images/email_alert_rendered.png`).
+  3. **Kịch bản 3 (Hydra Brute Force tốc độ cao):**
+     - Quét Hydra từ Kali vào root: Tầng 1 phản ứng chặn UFW trong tích tắc (<0.5s), tự động ngăn ngừa điều tra lặp lại (`[ALREADY BLOCKED]`), Tầng 2 AI phân tích lịch sử 2.132 sự kiện và kết luận `malicious_activity_likely` (`docs/images/tier1_auto_blocked_idempotent.png`, `docs/images/hydra_root_bruteforce_report.png`).
+- [x] **Soạn thảo Báo cáo Tiến độ:**
+  - Tạo [`BAO_CAO_TUAN_6.md`](file:///d:/soc-agent/BAO_CAO_TUAN_6.md) theo chuẩn 3 phần ngắn gọn, dễ hiểu, tích hợp đầy đủ 4 hình ảnh minh chứng thực nghiệm.
 
 
 ---
