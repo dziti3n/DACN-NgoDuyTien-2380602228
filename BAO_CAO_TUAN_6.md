@@ -47,9 +47,11 @@ Hệ thống đã kiểm chứng thành công trọn vẹn 3 kịch bản thực
 *Hình 1: Kịch bản 1 — Kẻ tấn công trên Kali vừa gõ `sudo su -` lập tức bị Agent ngắt phiên và chặn IP triệt để.*
 
 ![Bản tin HTML cảnh báo an ninh chuẩn SOC](docs/images/email_alert_rendered.png)
+
 *Hình 2: Kịch bản 2 — Bản tin cảnh báo chi tiết do AI sinh ra (Rule 5763, MITRE T1110, Qwen3:4b) kèm thông báo cách ly UFW 15 phút.*
 
 ![Minh chứng toàn trình Tầng 1 và Tầng 2 trong thực tế](docs/images/tier1_tier2_full_cycle.png)
+
 *Hình 3: Kịch bản 3 — Toàn trình vận hành: Tầng 1 kiểm tra thấy IP đã bị chặn và ngắt lặp lại, Tầng 2 AI phân tích hoàn tất và tự động gửi Email tới duytien0125@gmail.com.*
 
 ![Báo cáo phân tích chuyên sâu của AI cho Hydra](docs/images/hydra_root_bruteforce_report.png)
